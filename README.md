@@ -1,6 +1,6 @@
 # Web Forensics
 
-Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein verpflichtendes Aktenzeichen in jedem Modul. Erste Programmversion: **0.1.0**.
+Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein verpflichtendes Aktenzeichen in jedem Modul. Programmversion: **0.1.1**.
 
 Keine Datenbank, Benutzerkonten, Berichtablage, KI-Anbindung oder Telemetrie. Alle Browserressourcen werden lokal ausgeliefert. Optionaler gemeinsamer Passwortschutz ist direkt integriert; TLS und weitere Zugangsregeln konfiguriert der Betreiber beispielsweise an seinem Reverse-Proxy.
 
@@ -54,11 +54,47 @@ HTTP Basic verschlüsselt die Zugangsdaten nicht selbst. Für entfernten Zugriff
 
 ### Betrieb hinter einem Reverse-Proxy
 
-`.env.example` nach `.env` kopieren und die eigene HTTPS-Domain in `WF_ALLOWED_HOSTS` und `WF_TRUSTED_ORIGINS` eintragen. `WF_HTTPS=1` setzt das CSRF-Cookie auf Secure. Die Hostliste muss `127.0.0.1` für die Container-Gesundheitsprüfung enthalten.
+Die Vorlage `.env.example` enthält HTTP-Einstellungen für lokalen Zugriff bzw. einen SSH-Tunnel. Für eine öffentliche HTTPS-Domain die eigene `.env` anpassen, beispielsweise (Beispieldomain ersetzen):
+
+```dotenv
+WF_ALLOWED_HOSTS=localhost,127.0.0.1,[::1],forensics.example.org
+WF_HTTPS=1
+WF_TRUSTED_ORIGINS=https://forensics.example.org
+```
+
+`WF_ALLOWED_HOSTS` enthält Hostnamen **ohne** Protokoll oder Port, `WF_TRUSTED_ORIGINS` vollständige Browseradressen **mit** Protokoll und gegebenenfalls Port, ohne abschließenden Schrägstrich. Mehrere Einträge werden durch Kommas getrennt. Die Hostliste muss `127.0.0.1` für die Container-Gesundheitsprüfung enthalten.
+
+`WF_HTTPS=1` deklariert die öffentliche Verbindung als HTTPS: Django berücksichtigt das für die Herkunftsprüfung auch dann, wenn der Reverse-Proxy intern HTTP verwendet. Außerdem erhält das CSRF-Cookie das Secure-Attribut. Diese Einstellung ist explizit; die Anwendung leitet den Modus nicht aus beliebigen `X-Forwarded-Proto`-Headern ab. `WF_HTTPS=0` ist für Zugriff über HTTP vorgesehen. Beide Zugriffsarten nicht auf derselben Installation mischen.
+
+Wenn der Proxy den öffentlichen `Host` einschließlich eines abweichenden Browserports erhält, ist dieselbe HTTPS-Herkunft automatisch gültig; `WF_TRUSTED_ORIGINS` kann dann leer bleiben. Für einen Proxy, der den Host umschreibt, sind sowohl der interne Host in `WF_ALLOWED_HOSTS` als auch die öffentliche Browseradresse in `WF_TRUSTED_ORIGINS` erforderlich. Empfohlen ist das Erhalten des öffentlichen Hosts.
 
 Der Reverse-Proxy muss den öffentlichen `Host` erhalten und kann an den lokalen Port 8000 weiterleiten. Bei Nutzung des integrierten Passwortschutzes muss er außerdem den `Authorization`-Header durchreichen. Schreibzugriffe auf Disk, Access-/Error-Logs, Request-Body-Dumps, Tracing, Caching und Antwortpuffer auf Disk müssen dort entsprechend deaktiviert werden. Ein Request-Limit von 2 MiB und ein Upstream-Zeitlimit von 150 Sekunden passen zur Anwendung. Zusätzliche Authentifizierung und gegebenenfalls Rate Limits können am Proxy eingerichtet werden. Öffentliches HTTPS wird am Proxy terminiert; die Anwendung vertraut nicht pauschal eingehenden Forwarded-Headern.
 
+Für Nginx gehört dazu insbesondere `proxy_set_header Host $http_host;`, damit auch ein eventuell verwendeter Browserport erhalten bleibt. Cookie- und `X-CSRFToken`-Header unverändert weiterreichen.
+
 Der Container läuft als UID/GID `10001`, mit schreibgeschütztem Root-Dateisystem, ohne zusätzliche Capabilities, ohne persistente Volumes und ohne Docker-Protokollierung. Gunicorn nutzt `/dev/shm` nur für seine Worker-Verwaltung. Das Speicherlimit beträgt 512 MiB, zusätzlicher Container-Swap und Core-Dumps sind in Compose deaktiviert. Die tatsächlichen Host-Funktionen müssen diese Einstellungen unterstützen.
+
+### Sicherheitsprüfung / CSRF-Fehler beheben
+
+Ab Version 0.1.1 nennt die Fehlermeldung den konkreten Bereich, ohne Eingaben, Cookies oder Anmeldedaten zu protokollieren:
+
+| Fehlercode | Bedeutung / Korrektur |
+| --- | --- |
+| `invalid_host` | Öffentliche Domain fehlt in `WF_ALLOWED_HOSTS`, oder der Proxy setzt einen anderen Host. Die Seite wird bereits beim Öffnen abgewiesen. |
+| `csrf_origin_mismatch` | HTTPS-Modus, Browseradresse oder vom Proxy übermittelter Host stimmen nicht überein. `WF_HTTPS`, `Host` und bei Bedarf `WF_TRUSTED_ORIGINS` wie oben prüfen. |
+| `csrf_https_mismatch` | HTTP-Browseranfrage an eine als HTTPS konfigurierte Installation. Über HTTPS öffnen; für einen reinen HTTP-Test `WF_HTTPS=0` setzen. |
+| `csrf_cookie_missing` | Browser sendet kein gültiges Sicherheitscookie. Cookies für die Website zulassen und den HTTPS-/HTTP-Modus prüfen. |
+| `csrf_token_missing` / `csrf_token_invalid` | Seitentoken fehlt oder passt nicht zum Cookie. Seite vollständig neu laden; alte Tabs schließen. Der Proxy muss `X-CSRFToken` erhalten. |
+| `csrf_referer_invalid` | HTTPS-Anfrage ohne gültige Herkunftsangabe. Anwendung regulär im Browser öffnen und Proxy-/Herkunftseinstellungen prüfen. |
+
+Aktualisieren und eine geänderte `.env` übernehmen, ohne eigene Zugangsdaten zu überschreiben:
+
+```sh
+git pull --ff-only
+docker compose up --build -d --force-recreate
+```
+
+Danach den Browser vollständig neu laden. Die Anwendung verwendet jetzt ein eigenes Cookie namens `wf_csrftoken`, damit ein gewöhnliches `csrftoken` einer anderen Django-Anwendung auf derselben Domain die Analyse nicht stört. CSRF-Prüfung und Secure-Cookies bei HTTPS bleiben aktiv. Keine echte `.env`, Passwörter oder Cookie-/Authorization-Header zur Fehlerdiagnose veröffentlichen.
 
 ### Eigenes Logo
 

@@ -13,6 +13,7 @@ WSGI_APPLICATION = "webforensics.wsgi.application"
 INSTALLED_APPS = ["django.contrib.staticfiles"]
 MIDDLEWARE = [
     "webforensics.middleware.PrivacyMiddleware",
+    "webforensics.middleware.DeploymentMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "webforensics.auth.BasicAuthMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -37,7 +38,10 @@ FILE_UPLOAD_HANDLERS = []
 CSRF_FAILURE_VIEW = "webforensics.views.csrf_failure"
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = "Strict"
-CSRF_COOKIE_SECURE = os.environ.get("WF_HTTPS", "0") == "1"
+CSRF_COOKIE_NAME = "wf_csrftoken"
+# Public browser scheme, including HTTPS terminated by a reverse proxy.
+PUBLIC_HTTPS = os.environ.get("WF_HTTPS", "0") == "1"
+CSRF_COOKIE_SECURE = PUBLIC_HTTPS
 CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get("WF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "no-referrer"

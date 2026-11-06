@@ -3,6 +3,10 @@ import json
 from django.core import signing
 from django.http import HttpResponse, JsonResponse
 from django.middleware.csrf import get_token
+from django.middleware.csrf import (
+    REASON_BAD_ORIGIN, REASON_CSRF_TOKEN_MISSING, REASON_NO_CSRF_COOKIE,
+)
+from urllib.parse import urlsplit
 from django.shortcuts import render
 from django.views.decorators.http import require_GET, require_POST
 from django.conf import settings
@@ -16,7 +20,35 @@ from webforensics import __version__
 
 
 def csrf_failure(request, reason=""):
-    return JsonResponse({"error": "Die Sicherheitsprüfung ist abgelaufen. Bitte die Seite neu laden und erneut versuchen."}, status=403)
+    # Classify the failure without returning raw reasons (which may contain URLs)
+    # or logging cookies, credentials, headers or investigation data.
+    code = "csrf_failed"
+    message = "Die Sicherheitsprüfung ist fehlgeschlagen. Bitte die Seite vollständig neu laden und die Cookie-/Proxy-Konfiguration prüfen."
+    if reason.startswith(REASON_BAD_ORIGIN.split("%s", 1)[0]):
+        origin = request.headers.get("Origin", "")
+        try:
+            http_origin = urlsplit(origin).scheme.lower() == "http"
+        except ValueError:
+            http_origin = False
+        if settings.PUBLIC_HTTPS and http_origin:
+            code = "csrf_https_mismatch"
+            message = "Die Anwendung ist auf HTTPS eingestellt, die Browseranfrage verwendet jedoch HTTP. Bitte über HTTPS zugreifen oder für einen reinen HTTP-/SSH-Tunnel-Test WF_HTTPS=0 setzen und den Container neu erstellen."
+        else:
+            code = "csrf_origin_mismatch"
+            message = "Die Browseradresse passt nicht zur Herkunftsprüfung. Bei HTTPS hinter einem Reverse-Proxy WF_HTTPS=1 setzen und den öffentlichen Host-Header erhalten. WF_TRUSTED_ORIGINS muss bei einer abweichenden Proxy-Adresse die vollständige öffentliche Adresse mit Protokoll und gegebenenfalls Port enthalten. Container nach Änderungen neu erstellen."
+    elif reason == REASON_NO_CSRF_COOKIE or reason.startswith("CSRF cookie "):
+        code = "csrf_cookie_missing"
+        message = "Das Sicherheitscookie fehlt oder ist ungültig. Bitte Cookies für diese Website zulassen und die Seite vollständig neu laden. Bei HTTP-Zugriff muss WF_HTTPS=0 gesetzt sein; bei HTTPS WF_HTTPS=1. Den Container nach Konfigurationsänderungen neu erstellen."
+    elif reason == REASON_CSRF_TOKEN_MISSING:
+        code = "csrf_token_missing"
+        message = "Der Sicherheitstoken der Seite fehlt. Bitte die Seite vollständig neu laden. Der Reverse-Proxy muss den X-CSRFToken-Header durchreichen."
+    elif reason.startswith("CSRF token "):
+        code = "csrf_token_invalid"
+        message = "Der Sicherheitstoken der Seite passt nicht zum Cookie. Bitte die Seite vollständig neu laden; gegebenenfalls weitere alte Tabs dieser Anwendung schließen."
+    elif reason.startswith("Referer checking failed"):
+        code = "csrf_referer_invalid"
+        message = "Die Herkunftsangabe der HTTPS-Anfrage fehlt oder passt nicht. Bitte die Anwendung über ihre öffentliche Browseradresse öffnen und die Host-/Herkunftskonfiguration des Reverse-Proxys prüfen."
+    return JsonResponse({"error": message, "code": code}, status=403)
 
 
 def read_json(request):

@@ -1,6 +1,6 @@
 services:
   web:
-    image: web-forensics:0.1.0
+    image: web-forensics:0.1.1
     build: .
     init: true
     restart: unless-stopped

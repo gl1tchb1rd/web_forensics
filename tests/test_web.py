@@ -61,6 +61,19 @@ class WebTests(SimpleTestCase):
         self.assertIn(report["id"], text)
         self.assertIn(report["input_sha256"], text.replace("\n", ""))
 
+    def test_pdf_identifies_software_and_repository_without_brand_name(self):
+        report = analyze_header("AZ", HEADER)
+        reader = PdfReader(io.BytesIO(render_pdf(report)))
+        text = "\n".join(page.extract_text() for page in reader.pages)
+        url = "https://github.com/gl1tchb1rd/web_forensics"
+        self.assertIn("Web Forensics " + report["version"], text)
+        self.assertIn(url, text.replace("\n", ""))
+        # The owner remains part of the required repository URL, not a software name.
+        self.assertNotIn("gl1tchb1rd", text.replace(url, "").lower())
+        self.assertEqual(reader.metadata.author, "Web Forensics")
+        links = [annotation.get_object().get("/A", {}).get("/URI") for page in reader.pages for annotation in page.get("/Annots", [])]
+        self.assertIn(url, links)
+
     def test_external_queries_require_consent_and_valid_plan(self):
         with patch("webforensics.views.analyze_domain") as domain:
             response = self.post("/api/analyze", {"module": "domain", "case": "AZ", "input": "example.org"})

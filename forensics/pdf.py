@@ -14,6 +14,8 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
+REPOSITORY_URL = "https://github.com/gl1tchb1rd/web_forensics"
+
 FONT_DIR = Path(reportlab.__file__).parent / "fonts"
 pdfmetrics.registerFont(TTFont("WF", str(FONT_DIR / "Vera.ttf")))
 pdfmetrics.registerFont(TTFont("WF-Bold", str(FONT_DIR / "VeraBd.ttf")))
@@ -64,6 +66,7 @@ def render_pdf(report):
                          ("Beginn (UTC)", report["started_at"]), ("Abschluss (UTC)", report["finished_at"]), ("Software", "Web Forensics " + report["version"]),
                          ("SHA-256 der Eingabe", report["input_sha256"])):
         story.append(Paragraph(f"<b>{safe(label)}:</b> {safe(value)}", styles["BodyWF"]))
+    story.append(Paragraph(f'<b>Programm-Repository:</b> <link href="{REPOSITORY_URL}" color="#222222">{REPOSITORY_URL}</link>', styles["SmallWF"]))
     story += [p(report["hash_note"], "SmallWF"), HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#bbbbbb"))]
     heading("1. Wesentliche Feststellungen")
     for item in report["summary"]:

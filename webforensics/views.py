@@ -17,6 +17,7 @@ from forensics.network import NetworkError, network_budget, normalize_domain, re
 from forensics.pdf import render_pdf
 from forensics.report import filename, validate_case
 from webforensics import __version__
+from .releases import ReleaseError, check_latest_release
 
 
 def csrf_failure(request, reason=""):
@@ -71,6 +72,18 @@ def index(request):
 @require_GET
 def health(request):
     return JsonResponse({"status": "ok", "version": __version__})
+
+
+@require_POST
+def release_check(request):
+    try:
+        if read_json(request):
+            raise ValueError("Die Release-Prüfung benötigt keine Eingabe- oder Analysedaten.")
+        return JsonResponse(check_latest_release())
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    except ReleaseError as exc:
+        return JsonResponse({"error": str(exc)}, status=503)
 
 
 @require_POST

@@ -304,6 +304,57 @@
   });
   $$('[data-dialog="privacy"]').forEach(button => button.addEventListener("click", () => $("#privacy-dialog").showModal()));
   $("#close-dialog").addEventListener("click", () => $("#privacy-dialog").close());
+  $("#check-release").addEventListener("click", async () => {
+    const button = $("#check-release");
+    const status = $("#release-status");
+    const details = $("#release-details");
+    button.disabled = true;
+    button.classList.add("busy");
+    button.setAttribute("aria-busy", "true");
+    details.hidden = true;
+    $("#release-upgrade").hidden = true;
+    $("#release-commands").textContent = "";
+    status.textContent = "Veröffentlichte GitHub-Releases werden geprüft …";
+    try {
+      const response = await request("/api/releases/check", {});
+      const data = await response.json();
+      status.textContent = data.message;
+      if (data.release) {
+        details.hidden = false;
+        $("#release-link").href = data.release.url;
+        $("#release-link").textContent = `${data.release.tag} auf GitHub öffnen ↗`;
+        const published = new Date(data.release.published_at).toLocaleString("de-DE", {timeZone: "UTC"});
+        $("#release-time").textContent = `Veröffentlicht: ${published} UTC · Geprüft: ${new Date(data.checked_at).toLocaleString("de-DE", {timeZone: "UTC"})} UTC`;
+      }
+      if (data.status === "update_available" && data.instructions.length) {
+        $("#release-commands").textContent = data.instructions.join(" &&\n");
+        $("#release-upgrade").hidden = false;
+        $("#copy-release").textContent = "Befehle kopieren";
+      }
+    } catch (error) {
+      status.textContent = "Prüfung nicht möglich: " + error.message;
+    } finally {
+      button.disabled = false;
+      button.classList.remove("busy");
+      button.removeAttribute("aria-busy");
+    }
+  });
+  $("#copy-release").addEventListener("click", async event => {
+    const button = event.currentTarget;
+    const code = $("#release-commands");
+    try {
+      await navigator.clipboard.writeText(code.textContent);
+      button.textContent = "Befehle kopiert";
+    } catch (_) {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      code.focus();
+      $("#copy-release").textContent = "Befehle markiert – mit Strg+C kopieren";
+    }
+  });
   window.addEventListener("hashchange", navigate);
   document.addEventListener("click", event => {
     const anchor = event.target.closest('a[href^="#"]');

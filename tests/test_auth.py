@@ -60,7 +60,7 @@ class PasswordProtectionTests(SimpleTestCase):
 
     def test_all_routes_and_static_resources_are_protected(self):
         for method in ("get", "post"):
-            for path in ("/", "/static/app.js", "/static/app.css", "/api/plan", "/api/analyze", "/api/report.pdf", "/unknown", "/healthz/", "/healthz/../api/analyze"):
+            for path in ("/", "/static/app.js", "/static/app.css", "/api/plan", "/api/analyze", "/api/report.pdf", "/api/releases/check", "/unknown", "/healthz/", "/healthz/../api/analyze"):
                 with self.subTest(method=method, path=path):
                     response = getattr(self.client, method)(path)
                     self.assertEqual(response.status_code, 401)

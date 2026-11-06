@@ -1,6 +1,6 @@
 # Web Forensics
 
-Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein verpflichtendes Aktenzeichen in jedem Modul. Programmversion: **0.1.1**.
+Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein verpflichtendes Aktenzeichen in jedem Modul. Programmversion: **0.2.0** (Entwicklungsstand bis zur Veröffentlichung eines Releases).
 
 Keine Datenbank, Benutzerkonten, Berichtablage, KI-Anbindung oder Telemetrie. Alle Browserressourcen werden lokal ausgeliefert. Optionaler gemeinsamer Passwortschutz ist direkt integriert; TLS und weitere Zugangsregeln konfiguriert der Betreiber beispielsweise an seinem Reverse-Proxy.
 
@@ -8,10 +8,10 @@ Keine Datenbank, Benutzerkonten, Berichtablage, KI-Anbindung oder Telemetrie. Al
 
 ## Start mit Docker auf Linux
 
-Voraussetzungen: Docker Engine und Docker Compose v2. Das Image wird lokal aus diesem Repository gebaut; ein veröffentlichtes Registry-Image wird nicht vorausgesetzt.
+Voraussetzungen: Docker Engine und Docker Compose v2. Das Image wird lokal aus diesem Repository gebaut; ein veröffentlichtes Registry-Image wird nicht vorausgesetzt. Für eine reguläre Installation einen veröffentlichten stabilen Tag auf der [GitHub-Releases-Seite](https://github.com/gl1tchb1rd/web_forensics/releases) wählen und `vX.Y.Z` im folgenden Befehl ersetzen. Ein Tag allein genügt nicht: Er muss zu einem veröffentlichten Release gehören. Falls noch kein Release veröffentlicht ist, gibt es noch keinen regulären Installations-/Updatekanal. Die Anwendung veröffentlicht selbst keine Releases.
 
 ```sh
-git clone https://github.com/gl1tchb1rd/web_forensics.git
+git clone --branch vX.Y.Z --single-branch https://github.com/gl1tchb1rd/web_forensics.git
 cd web_forensics
 docker compose up --build -d
 ```
@@ -87,18 +87,42 @@ Ab Version 0.1.1 nennt die Fehlermeldung den konkreten Bereich, ohne Eingaben, C
 | `csrf_token_missing` / `csrf_token_invalid` | Seitentoken fehlt oder passt nicht zum Cookie. Seite vollständig neu laden; alte Tabs schließen. Der Proxy muss `X-CSRFToken` erhalten. |
 | `csrf_referer_invalid` | HTTPS-Anfrage ohne gültige Herkunftsangabe. Anwendung regulär im Browser öffnen und Proxy-/Herkunftseinstellungen prüfen. |
 
-Aktualisieren und eine geänderte `.env` übernehmen, ohne eigene Zugangsdaten zu überschreiben:
+Eine geänderte `.env` übernehmen, ohne eigene Zugangsdaten zu überschreiben:
 
 ```sh
-git pull --ff-only
 docker compose up --build -d --force-recreate
 ```
+
+Für neue Programmversionen ausschließlich die Anleitung der Release-Prüfung verwenden (siehe unten), keine Aktualisierung vom Entwicklungsbranch.
 
 Danach den Browser vollständig neu laden. Die Anwendung verwendet jetzt ein eigenes Cookie namens `wf_csrftoken`, damit ein gewöhnliches `csrftoken` einer anderen Django-Anwendung auf derselben Domain die Analyse nicht stört. CSRF-Prüfung und Secure-Cookies bei HTTPS bleiben aktiv. Keine echte `.env`, Passwörter oder Cookie-/Authorization-Header zur Fehlerdiagnose veröffentlichen.
 
 ### Eigenes Logo
 
-Die Chat-Vorschau des Logos ist nicht als Bilddatei im Repository vorhanden. Bis die Originaldatei hinterlegt ist, wird ein lokaler Schriftzug in Türkis/Magenta angezeigt. Ein PNG unter `static/brand/logo.png` ablegen und das Image neu bauen; die Oberfläche bindet es automatisch ein. `static/brand/` bei Bedarf selbst anlegen. Alternativ die PNG-Datei beim Containerstart schreibgeschützt an `/app/static/brand/logo.png` mounten. In PDF-Berichten bleibt der Kopf bewusst typografisch und sachlich.
+Die Oberfläche lädt das Logo aus `static/brand/logo.png` und zeigt es im Kopfbereich sowie groß auf der Startseite. Es wird ausschließlich lokal ausgeliefert; die Webseite bindet kein externes Avatarbild ein. Eine eigene PNG-Datei kann an dieser Stelle hinterlegt oder schreibgeschützt nach `/app/static/brand/logo.png` gemountet werden. Falls die Datei fehlt, erscheint der lokale Schriftzug als Fallback.
+
+Die PDF-Berichte verwenden ausschließlich den Programmnamen **Web Forensics**, die genaue Softwareversion und einen anklickbaren Link zum [Programm-Repository](https://github.com/gl1tchb1rd/web_forensics). Das farbige Logo und der Markenname werden nicht als Berichtsbranding verwendet; der GitHub-Benutzername ist lediglich Bestandteil der Repository-Adresse.
+
+### Nur veröffentlichte Releases prüfen und installieren
+
+Die Startseite bietet **GitHub-Releases prüfen**. Erst der Klick löst einen serverseitigen GET auf `https://api.github.com/repos/gl1tchb1rd/web_forensics/releases/latest` aus. Beim Seitenaufruf gibt es keine Hintergrundabfrage. Es werden weder Untersuchungsdaten noch Zugangsdaten, Cookies oder die installierte Versionsnummer an GitHub gesendet. GitHub sieht die Absender-IP der Installation bzw. des Proxys und einen festen technischen User-Agent. Ausgehender HTTPS-Zugriff auf `api.github.com` ist dafür erforderlich; es wird kein GitHub-Token benötigt. Private Repositories ohne öffentlich abrufbare Releases werden nicht unterstützt.
+
+Die Funktion verwendet ausschließlich den von GitHub als aktuell ausgewiesenen veröffentlichten regulären Release. **Commits auf `main`, einzelne Git-Tags, Entwürfe und Vorabversionen werden nicht als Updates angeboten.** Release-Tags müssen stabile Versionsnummern wie `v1.2.3` oder `1.2.3` verwenden. Es gibt keine automatische Installation und keinen serverseitigen Git-/Docker-Aufruf.
+
+Ist die Release-Versionsnummer höher als die installierte Version, erscheinen der Release-Link und ein kopierbarer Befehlsblock. Beispiel für einen tatsächlich veröffentlichten Release `v1.2.3`:
+
+```sh
+test -z "$(git status --porcelain)" &&
+git fetch --no-tags https://github.com/gl1tchb1rd/web_forensics.git refs/tags/v1.2.3:refs/tags/v1.2.3 &&
+git switch --detach refs/tags/v1.2.3 &&
+docker compose up --build -d --force-recreate
+```
+
+Der Block im bestehenden Checkout stoppt bei lokalen Änderungen, einem fehlgeschlagenen Fetch oder einem fehlenden Tag. Er verändert keinen Entwicklungsbranch, überschreibt keine lokalen Änderungen und lässt die ignorierte `.env` erhalten. Bei einem Stopp zunächst `git status --short` prüfen. Der Detached-HEAD-Zustand ist für die Bereitstellung eines exakten Release-Tags beabsichtigt. Danach die Browserseite vollständig neu laden. Das Abrufen des Tags erfolgt nur auf dem Server des Betreibers, wenn dieser die Anleitung selbst ausführt.
+
+Eine nicht erreichbare GitHub-API oder ein Abfragelimit wird als Fehler angezeigt, niemals als „aktuell“. Gibt es keinen öffentlich abrufbaren regulären Release, erscheinen keine Updatebefehle. Ist die installierte Versionsnummer höher, wird kein Downgrade angeboten. Die Funktion bestätigt die Versionsnummer, nicht die Herkunft beliebiger lokaler Codeänderungen.
+
+Für den Herausgeber: Zunächst `webforensics/__init__.py` und den Image-Tag in `compose.yaml` auf die gewünschte Versionsnummer setzen. Anschließend auf GitHub einen dazu passenden Tag auswählen/erstellen und den regulären Release ausdrücklich veröffentlichen. Ein Push auf `main` oder das Erstellen eines Tags allein löst keinen Updatehinweis aus. Für diese Änderung wird kein Release automatisch veröffentlicht.
 
 ## Module
 
@@ -151,6 +175,7 @@ Anwendung und Gunicorn schreiben keine Zugriffs-, Fehler- oder Analyseprotokolle
 | Domain-RDAP | Zuständige Registry laut Abfrageplan | Vollständige eingegebene Domain |
 | Netzwerk-RDAP | Zuständiges RIR laut Abfrageplan, z. B. ARIN/RIPE/APNIC/LACNIC/AFRINIC | Einzelne öffentliche IP-Adresse |
 | TLS/HTTPS | Öffentliche IP der Zieldomain, Port 443 | SNI/Host, Standard-User-Agent und HEAD-Anfrage an `/` |
+| Manuelle Release-Prüfung | `api.github.com` | Statische Abfrage des aktuellen öffentlichen Releases, ohne Untersuchungsdaten oder installierte Versionsnummer |
 
 Alle externen Verbindungen offenbaren auch die Absender-IP der Installation bzw. des konfigurierten Proxys. Aktenzeichen und vollständige Header gehen nicht an diese Dienste. Eigene DNS-Resolver können über `WF_DNS_RESOLVERS` als kommagetrennte IPs festgelegt werden (in Compose bei Bedarf zusätzlich eintragen). Ausgehende DNS-Verbindungen und HTTPS müssen beim jeweiligen Betreiber erlaubt sein.
 

@@ -213,7 +213,7 @@
       const marker = ++generation;
       controller = new AbortController();
       const signal = controller.signal;
-      const status = element("p", "field-help run-status", isPlanRequest ? "RDAP-Anbieter werden ermittelt …" : "Analyse läuft. Netzwerkabfragen können etwa eine Minute dauern …");
+      const status = element("p", "field-help run-status", isPlanRequest ? "Abfrageziele werden ermittelt …" : "Analyse läuft. Netzwerkabfragen können bis zu etwa zwei Minuten dauern …");
       status.setAttribute("role", "status");
       $(".form-actions", form).before(status);
       buttonLabel(button, isPlanRequest ? "Abfrageplan wird erstellt …" : "Analyse läuft …");
@@ -223,7 +223,7 @@
       try {
         let response;
         if (isPlanRequest) {
-          const options = module === "domain" ? Object.fromEntries(["rdap", "network", "tls", "http"].map(key => [key, form.elements[key].checked])) : {network: true};
+          const options = module === "domain" ? Object.fromEntries(["rdap", "whois", "network", "tls", "http"].map(key => [key, form.elements[key].checked])) : {network: true};
           response = await request("/api/plan", {module, domain: module === "domain" ? payload.input : "", options}, signal);
         } else response = await request("/api/analyze", payload, signal);
         const data = await response.json();

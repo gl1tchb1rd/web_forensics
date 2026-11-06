@@ -1,6 +1,6 @@
 services:
   web:
-    image: web-forensics:0.2.0
+    image: web-forensics:0.3.0
     build: .
     init: true
     restart: unless-stopped
@@ -14,6 +14,7 @@ services:
       WF_AUTH_ENABLED: "${WF_AUTH_ENABLED:-0}"
       WF_AUTH_USERNAME: "${WF_AUTH_USERNAME:-admin}"
       WF_AUTH_PASSWORD: "${WF_AUTH_PASSWORD:-}"
+      WF_WHOIS_PROXY: "${WF_WHOIS_PROXY:-}"
     read_only: true
     cap_drop:
       - ALL

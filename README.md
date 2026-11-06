@@ -1,6 +1,6 @@
 # Web Forensics
 
-Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein verpflichtendes Aktenzeichen in jedem Modul. Programmversion: **0.2.0** (Entwicklungsstand bis zur Veröffentlichung eines Releases).
+Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein verpflichtendes Aktenzeichen in jedem Modul. Programmversion: **0.3.0** (Entwicklungsstand bis zur Veröffentlichung eines Releases).
 
 Keine Datenbank, Benutzerkonten, Berichtablage, KI-Anbindung oder Telemetrie. Alle Browserressourcen werden lokal ausgeliefert. Optionaler gemeinsamer Passwortschutz ist direkt integriert; TLS und weitere Zugangsregeln konfiguriert der Betreiber beispielsweise an seinem Reverse-Proxy.
 
@@ -129,16 +129,37 @@ Für den Herausgeber: Zunächst `webforensics/__init__.py` und den Image-Tag in 
 ### Domainanalyse
 
 - DNS: A, AAAA, NS, MX, TXT, SOA, CAA, jeweils mit TTL und Ergebnisstatus.
-- Domainregistrierung: RDAP anhand des IANA-Verzeichnisses, einschließlich verfügbarer Registrar-/Kontaktrollen, Status und Datumsangaben.
+- Domainregistrierung: RDAP anhand des IANA-Verzeichnisses, einschließlich domainbezogener Registry-/Registrar-Verweise, Status und Datumsangaben. Antworten jeder Stufe bleiben erhalten.
+- Klassische WHOIS-Kette: IANA → Registry → Registrar → weitere neue WHOIS-Verweise, mit vollständiger Abfragehistorie im Arbeitsspeicher und Rohdaten-Auszügen im Bericht.
 - Netzwerkregistrierung: zuständiges RIR über das IANA-IP-Verzeichnis, bis zu drei öffentliche IPs, Netzbereich und veröffentlichte Betreiberangaben.
 - TLS: geprüfter Hostname und System-Vertrauenskette, Gültigkeit, Aussteller, SAN-Domains, ausgehandeltes TLS/Cipher und SHA-256-Fingerabdruck des Serverzertifikats.
 - HTTPS: HEAD-Anfrage, Status, Weiterleitungsziel und ausgewählte Antwort-/Sicherheitsheader. Weiterleitungen werden **nicht** verfolgt; keine Seiteninhalte oder Skripte geladen.
 
 DNS ist immer aktiv. Die übrigen Bereiche sind einzeln abwählbar. Vor dem Start wird ein Abfrageplan erstellt. Das Ermitteln der RDAP-Dienste kann bereits öffentliche IANA-Verzeichnisse laden; das wird vor dem Plan-Button ausgewiesen. Der Plan zeigt die Domain-Registry und die möglichen RIR-Dienste vor der Zustimmung. Im Report sind die tatsächlich angefragten Quellen dokumentiert. Ein nicht verfügbarer Dienst wird ausdrücklich als nicht verfügbar ausgewiesen und gilt nicht als unauffälliges Ergebnis.
 
-Externe Abfragen erhalten ein gemeinsames Zeitbudget (40 Sekunden für den Plan, 65 Sekunden für die Analyse), zusätzlich zu den einzelnen DNS-, Verbindungs- und Antwortlimits. Bereits laufende Socketoperationen können noch bis zu ihrem kurzen Einzelzeitlimit auslaufen.
+Externe Abfragen erhalten ein gemeinsames Zeitbudget (40 Sekunden für den Plan, 120 Sekunden für die Domainanalyse, 65 Sekunden für die Headeranalyse), zusätzlich zu den einzelnen DNS-, Verbindungs- und Antwortlimits. Bereits laufende Socketoperationen können noch bis zu ihrem kurzen Einzelzeitlimit auslaufen.
 
-Dies ist **kein** vollständiger TLS-Schwachstellenscan, keine ASN-/BGP- oder Geolokalisierungsanalyse und keine eigenständige DNSSEC-/OCSP-/CRL-Prüfung. Klassisches Port-43-WHOIS ist in dieser Version nicht implementiert; die Registrierungsabfragen erfolgen über RDAP. Für Subdomains bieten Registrierungsdienste regelmäßig keinen eigenen Datensatz an. Es wird nicht stillschweigend eine vermeintliche registrierte Basisdomain geraten.
+Dies ist **kein** vollständiger TLS-Schwachstellenscan, keine ASN-/BGP- oder Geolokalisierungsanalyse und keine eigenständige DNSSEC-/OCSP-/CRL-Prüfung. Die registrierbare Basisdomain wird für RDAP/WHOIS über den in `tldextract` mitgelieferten Public-Suffix-Snapshot ermittelt, etwa `mail.example.co.uk` → `example.co.uk`. Es gibt keinen Listendownload oder Dateicache zur Laufzeit. DNS, TLS und HTTPS untersuchen weiterhin die eingegebene Subdomain. Ist die Endung im Snapshot unbekannt, wird das ausgewiesen und die vollständige Eingabe verwendet.
+
+### WHOIS- und RDAP-Abfrageketten
+
+Die klassische Domain-WHOIS-Kette orientiert sich an der bewährten Implementierung aus [Forensic SiteSaver, domain_analysis.py](https://github.com/gl1tchb1rd/forensic_sitesaver/blob/c27b021a2500bbc7a499e4791129f536c3ee94c7/.forensic_sitesaver/domain_analysis.py) (GPL-3.0-or-later; Urheberhinweis im adaptierten Modul `forensics/whois.py`). Übernommen wurden insbesondere:
+
+- IANA-Abfrage der registrierbaren Domain, bei fehlendem nutzbarem Verweis zusätzlicher TLD-Fallback.
+- Tolerantes Erkennen von `refer`, `whois`, `Whois Server`, `Registrar WHOIS Server`, `Registry WHOIS Server`, `ReferralServer` und `Referral Server`, einschließlich Einrückungen, Tabs und Groß-/Kleinschreibung.
+- VeriSign-/CRSNIC-Abfragen mit `dom`, `domain`, `=` und schließlich dem bloßen Domainnamen, soweit die vorherigen Antworten keine passenden Domaininformationen liefern. Transportfehler und erkennbare Abfragelimits lösen keine sinnlosen Syntax-Retries aus.
+- Eine Warteschlange verfolgt alle neu genannten WHOIS-Dienste, auch nach dem Registrar und über verzweigte Verweise. Bereits abgefragte oder vorgemerkte Dienste werden nicht nochmals kontaktiert. Verweise aus früheren Antwortvarianten bleiben erhalten.
+- Maximal acht weitere WHOIS-Server nach IANA. Das ist ein Sicherheitslimit, kein reguläres Kettenende. Offene Dienste, Zeit-/Größenlimits und Abfragefehler werden ausdrücklich als unvollständig ausgewiesen.
+
+Bei `.de` endet die klassische WHOIS-Kette regulär bei DENIC; ein dort fehlender weiterer Registrar-Verweis ist nicht automatisch ein Fehler. Eine zusätzliche DENIC-WebWhois-Abfrage aus Sitesaver ist nicht Bestandteil dieser Änderung. Verdeckte oder nicht veröffentlichte Angaben werden durch die Kettenverfolgung nicht zugänglich.
+
+Jede WHOIS-Anfrage wird im Browserbericht und PDF mit Dienst, tatsächlicher Query, UTC-Zeitpunkt, verweisendem Dienst, erkannten Folgediensten, empfangener Bytezahl und SHA-256 festgehalten. Rohdaten werden pro Antwort als Auszug von maximal 16.384 Zeichen mitgegeben; die Prüfsumme bezieht sich auf sämtliche tatsächlich empfangenen Bytes. Antworten sind auf 128 KiB plus ein Erkennungsbyte begrenzt. Bei Timeout oder Größenlimit bleibt die Teilantwort erhalten und wird als solche gekennzeichnet. Es gibt weiterhin keine Berichtsdateien, Datenbank oder Logs auf dem Server.
+
+Domain-RDAP folgt zusätzlich HTTP-Weiterleitungen und `related`-Links für dieselbe registrierbare Domain über HTTPS/443. Keine Kontakt-/Entity-Abfragen, anderen Domains, zusätzlichen URL-Abfrageparameter oder anderen Protokolle. Maximal acht Abrufe einschließlich Weiterleitungen. Jede Antwort und deren Herkunft bleibt dokumentiert; ein nicht erreichbarer Registrar verwirft keine frühere Registry-Antwort. Die Netzbereichs-RDAP-Abfragen bleiben auf die im Plan ausgewiesenen RIR-Dienste beschränkt.
+
+**Übermittelte Daten und Ziele:** Der Abfrageplan nennt IANA, die bekannte Registry und die Möglichkeit dynamischer Weiterverweise, bevor die Analyse beginnt. Die konkreten Folgedienste können erst aus deren Antworten bekannt werden. Die Zustimmung umfasst diese beschriebenen Referral-Abfragen. Übermittelt werden nur die registrierbare Domain bzw. TLD und feste Query-Präfixe, kein Aktenzeichen, E-Mail-Header, Cookie oder Anwendungspasswort. Alle tatsächlich abgefragten Dienste stehen im Bericht. WHOIS über TCP 43 ist unverschlüsselt; das ist in Eingabemaske und Abfrageplan ausgewiesen. Die WHOIS-Kette kann separat abgewählt werden.
+
+**Betrieb:** Ausgehendes TCP 43 zu öffentlichen WHOIS-Diensten muss erlaubt sein. Bei einem Proxy muss HTTP CONNECT zu TCP 43 freigegeben sein. Optional kann `WF_WHOIS_PROXY` einen gesonderten HTTP-CONNECT-Proxy festlegen; sonst wird der vorhandene HTTPS-Proxy genutzt, sofern konfiguriert. Es erfolgt kein direkter Ausweichversuch bei einer Proxy-Ablehnung. Ohne Proxy wird direkt zur vorher geprüften, festgehaltenen öffentlichen IP verbunden. Private Ziele, Anmeldedaten in Referrals, andere Ports und Protokolle werden gesperrt. RWHOIS ist ein anderes Protokoll (typisch TCP 4321) und wird nicht stillschweigend als WHOIS/TCP 43 behandelt; ein solcher Verweis wird als nicht unterstützte, offene Stufe ausgewiesen. Anbieter können WHOIS eingestellt, eingeschränkt oder durch RDAP ersetzt haben; dies wird nicht als unauffälliger bzw. vollständig ermittelter Datensatz dargestellt.
 
 ### E-Mail-Header-Analyse
 
@@ -172,7 +193,8 @@ Anwendung und Gunicorn schreiben keine Zugriffs-, Fehler- oder Analyseprotokolle
 | --- | --- | --- |
 | DNS | Resolver aus Container-/Hostkonfiguration; rekursive Weitergabe möglich | Domain-/Dienstnamen, Recordtyp |
 | Anbieterlisten | `data.iana.org/rdap/dns.json`, `ipv4.json`, `ipv6.json` | Keine Untersuchungsdaten; statische Verzeichnisabfrage |
-| Domain-RDAP | Zuständige Registry laut Abfrageplan | Vollständige eingegebene Domain |
+| Domain-RDAP | Zuständige Registry und deren domainbezogene Registrar-RDAP-Verweise über HTTPS | Registrierbare Basisdomain |
+| Klassische WHOIS-Kette | `whois.iana.org` und die daraufhin benannten öffentlichen WHOIS-Server, TCP 43 | Registrierbare Domain, gegebenenfalls TLD und feste VeriSign-Abfragepräfixe; unverschlüsselt |
 | Netzwerk-RDAP | Zuständiges RIR laut Abfrageplan, z. B. ARIN/RIPE/APNIC/LACNIC/AFRINIC | Einzelne öffentliche IP-Adresse |
 | TLS/HTTPS | Öffentliche IP der Zieldomain, Port 443 | SNI/Host, Standard-User-Agent und HEAD-Anfrage an `/` |
 | Manuelle Release-Prüfung | `api.github.com` | Statische Abfrage des aktuellen öffentlichen Releases, ohne Untersuchungsdaten oder installierte Versionsnummer |
@@ -197,7 +219,7 @@ python -m venv .venv
 
 Keine Migrationen oder Datenbankeinrichtung nötig. `requirements.in` enthält die direkten, `requirements.txt` sämtliche festgeschriebenen Laufzeitabhängigkeiten. `requirements-dev.txt` ergänzt PDF- und Browsertestwerkzeuge. Der Entwicklungsstart nutzt ebenfalls die Gunicorn-Konfiguration ohne Logging; Djangos `runserver` ist für den zugesagten Betrieb ohne Zugriffslogs nicht vorgesehen.
 
-Automatische Tests prüfen Offline-Verarbeitung, Headerbefunde, SSRF-Sperren, IP-Pinning/SNI, Abfragepläne, Redirect-Grenzen, Pflichtfelder, CSRF, Berichtsintegrität, PDF-Inhalte, Mehrseitenberichte und den optionalen Passwortschutz. Netzwerkantworten werden in den deterministischen Tests kontrolliert simuliert; das ist kein Nachweis der Verfügbarkeit aller externen Anbieter. Ein Browsertest gegen einen laufenden Dienst ist mit `tests/browser_smoke.py` möglich (System-Chromium oder `playwright install chromium` erforderlich). Bei aktiviertem Passwortschutz dafür `WF_TEST_AUTH_USERNAME` und `WF_TEST_AUTH_PASSWORD` in der Testumgebung setzen; die Werte werden nicht ausgegeben.
+Automatische Tests prüfen Offline-Verarbeitung, Headerbefunde, SSRF-Sperren, IP-Pinning/SNI, Abfragepläne, WHOIS-/RDAP-Ketten, VeriSign- und IANA-Fallbacks, Referral-Schleifen, Abbruchgründe, Redirect-Grenzen, Pflichtfelder, CSRF, Berichtsintegrität, PDF-Inhalte, Mehrseitenberichte und den optionalen Passwortschutz. Netzwerkantworten werden in den deterministischen Tests kontrolliert simuliert; das ist kein Nachweis der Verfügbarkeit aller externen Anbieter. Ein Browsertest gegen einen laufenden Dienst ist mit `tests/browser_smoke.py` möglich (System-Chromium oder `playwright install chromium` erforderlich). Bei aktiviertem Passwortschutz dafür `WF_TEST_AUTH_USERNAME` und `WF_TEST_AUTH_PASSWORD` in der Testumgebung setzen; die Werte werden nicht ausgegeben.
 
 ## Weitere Module ergänzen
 

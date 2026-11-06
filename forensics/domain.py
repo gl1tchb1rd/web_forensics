@@ -13,8 +13,11 @@ from cryptography.hazmat.primitives import hashes
 
 from .network import NetworkError, fetch_https, is_public, normalize_domain, open_tls, resolver, resolver_description
 from .report import finish, new_report, section
+from .registration import registration_domain
+from .whois import add_whois
+from .rdap_chain import walk_domain_rdap
 
-OPTIONS = ("rdap", "network", "tls", "http")
+OPTIONS = ("rdap", "whois", "network", "tls", "http")
 
 
 @lru_cache(maxsize=3)
@@ -52,6 +55,11 @@ def network_provider(ip):
 def make_plan(module, domain="", options=None):
     options = options or {}
     plan = {"module": module, "domain": normalize_domain(domain) if module == "domain" else "", "options": {key: bool(options.get(key)) for key in OPTIONS}, "recipients": [], "errors": [], "provider": None, "allowed_rdap_hosts": []}
+    if module == "domain":
+        registered, warning = registration_domain(plan["domain"]) if (options.get("rdap") or options.get("whois")) else (plan["domain"], "")
+        plan["registration_domain"] = registered
+        if warning:
+            plan["errors"].append(warning)
     recipients = plan["recipients"]
     recipients.append(["DNS-Auflösung", f"Resolver der Installation: {resolver_description()}", "Abgefragte Domainnamen und Dienstnamen; der Resolver kann rekursiv weitere DNS-Server kontaktieren."])
     if module == "domain":
@@ -59,15 +67,24 @@ def make_plan(module, domain="", options=None):
             recipients.append(["TLS / HTTPS", plan["domain"] + ":443", "Zieldomain (SNI/Host), öffentliche Server-IP des Betreibers; keine Aktenzeichen oder Header. HTTPS ohne automatisches Folgen von Weiterleitungen."])
         if options.get("rdap"):
             try:
-                plan["provider"] = domain_provider(plan["domain"])
+                plan["provider"] = domain_provider(plan["registration_domain"])
                 if plan["provider"]:
                     host = urlsplit(plan["provider"]).hostname
                     plan["allowed_rdap_hosts"].append(host)
-                    recipients.append(["Domain-RDAP", host, "Vollständige eingegebene Domain; kein Aktenzeichen."])
+                    recipients.append(["Domain-RDAP", host, f"Registrierungsdomain {plan['registration_domain']}; kein Aktenzeichen."])
                 else:
                     plan["errors"].append("Für diese Domainendung ist kein HTTPS-RDAP-Dienst im IANA-Verzeichnis gefunden worden.")
             except NetworkError as exc:
                 plan["errors"].append(str(exc))
+        if options.get("whois"):
+            recipients.append(["Klassische WHOIS-Abfragekette (unverschlüsselt, TCP 43)",
+                               "whois.iana.org → dort genannte Registry-/Registrar-WHOIS-Dienste und deren weitere WHOIS-Verweise (öffentliche Ziele, TCP 43)",
+                               f"Registrierungsdomain {plan['registration_domain']}, gegebenenfalls deren TLD, sowie VeriSign-Abfragevarianten. Kein Aktenzeichen. Die Folgedienste werden erst durch die Antworten bekannt, bis zu acht zusätzliche Dienste werden verfolgt und im Bericht einzeln dokumentiert."])
+        if options.get("rdap"):
+            plan["follow_domain_rdap"] = True
+            recipients.append(["Domain-RDAP-Weiterverweise (HTTPS)",
+                               "Von der Registry bzw. Folgediensten benannte öffentliche Registrar-RDAP-Dienste (HTTPS, Port 443)",
+                               f"Nur weitere Domainabfragen für {plan['registration_domain']}, keine Kontakt-/Entity-Abfragen. Die genauen Folgedienste werden aus den Antworten ermittelt; maximal acht Abfragen einschließlich Weiterleitungen. Keine Aktenzeichen oder Zugangsdaten."])
     if options.get("network"):
         try:
             hosts = set()
@@ -128,7 +145,28 @@ def rdap_rows(data):
     return rows
 
 
-def add_rdap_section(report, title, url, allowed_hosts):
+def add_rdap_section(report, title, url, allowed_hosts, follow_domain=None):
+    if follow_domain:
+        chain = walk_domain_rdap(url, follow_domain, allowed_hosts, fetch_https)
+        section(report, "RDAP-Abfragekette", [["Abgefragte Adressen", "\n".join(step["url"] for step in chain["steps"])],
+                ["Ende / Abbruch", chain["reason"]], ["Offene Adressen", "\n".join(chain["pending"]) or "Keine"]],
+                status="ok" if chain["complete"] else "unavailable", note="Registry- und Registrar-Antworten sowie HTTP-Weiterleitungen werden einzeln erhalten. Doppelte Verweise werden nicht erneut abgefragt.")
+        for number, rec in enumerate(chain["steps"], 1):
+            try:
+                rows = rdap_rows(rec["data"]) if rec["data"] else []
+            except (ValueError, TypeError, KeyError, AttributeError, IndexError):
+                rows = []
+                rec["error"] = "Die Felder dieser RDAP-Antwort konnten nicht vollständig interpretiert werden."
+            rows += [["HTTP-Status", str(rec["status"]) if rec["status"] is not None else "Keine Antwort"],
+                     ["Abfragezeitpunkt (UTC)", rec["captured_at"]], ["Verweis von", rec["parent"] or "Dienst aus dem Abfrageplan"],
+                     ["Weitere Verweise", "\n".join(rec["links"]) or "Keine"], ["SHA-256 der Antwortbytes", rec["sha256"] or "Keine Antwort"]]
+            note = rec["error"] or "Registrierungsangaben der jeweiligen Quelle; keine Bestätigung des tatsächlichen Nutzers oder Standorts."
+            if len(rec["raw"]) > 16384:
+                note += " Rohdaten-Auszug auf 16.384 Zeichen begrenzt; die Prüfsumme bezieht sich auf alle empfangenen Antwortbytes."
+            section(report, title if number == 1 else f"{title} / Stufe {number}", rows,
+                    status="unavailable" if rec["error"] else "ok", raw=rec["raw"][:16384], note=note, source=rec["url"])
+            report["sources"].append(rec["url"])
+        return
     try:
         data, body, final_url = get_rdap(url, allowed_hosts)
         raw = body.decode("utf-8", "replace")
@@ -194,19 +232,22 @@ def tls_section(report, domain, ips):
 
 def analyze_domain(case, original, plan):
     domain = normalize_domain(original)
+    registered = plan.get("registration_domain") or registration_domain(domain)[0]
     options = plan["options"]
     report = new_report("domain", case, domain, original)
     report["disclosure"] = plan["recipients"]
     report["sources"].append("DNS-Resolver der Installation: " + resolver_description())
     report["limitations"] += [
         "Momentaufnahme zum Abfragezeitpunkt. DNS- und Registrierungsdaten können sich ändern; DNSSEC wird nicht eigenständig validiert.",
-        "RDAP ist der strukturierte Nachfolger von WHOIS. Diese Version führt keine klassischen Port-43-WHOIS-Abfragen aus. Verdeckte oder nicht veröffentlichte Angaben können nicht ermittelt werden.",
-        "RDAP wird für die eingegebene Domain abgefragt. Bei Subdomains kann der Registry-Dienst keine Domainregistrierung liefern.",
+        "RDAP und klassisches WHOIS dokumentieren veröffentlichte Registrierungsangaben. Verdeckte, gelöschte oder nicht veröffentlichte Angaben können nicht ermittelt werden.",
+        "Registrierungsabfragen verwenden die registrierbare Basisdomain aus dem mitgelieferten Public-Suffix-Snapshot (ohne automatischen Listendownload). DNS, TLS und HTTPS untersuchen weiterhin die eingegebene Domain.",
         "Netzwerk-RDAP auf maximal drei öffentliche IP-Adressen begrenzt; TLS und HTTPS prüfen die erste öffentliche DNS-Adresse. Keine ASN-/BGP-Zuordnung und keine Standortermittlung.",
         "Ein verifiziertes TLS-Zertifikat ist kein Nachweis der Seriosität eines Angebots.",
     ]
     for error in plan["errors"]:
         report["summary"].append({"level": "notice", "text": error})
+    if registered != domain:
+        report["summary"].append({"level": "info", "text": f"Die Eingabe ist eine Subdomain. RDAP/WHOIS beziehen sich auf {registered}; DNS, TLS und HTTPS auf {domain}."})
     with ThreadPoolExecutor(max_workers=4) as pool:
         answers = list(pool.map(lambda kind: dns_record(domain, kind), ("A", "AAAA", "NS", "MX", "TXT", "SOA", "CAA")))
     ips = [ip for answer in answers if answer["kind"] in ("A", "AAAA") for ip in answer["values"]]
@@ -217,9 +258,12 @@ def analyze_domain(case, original, plan):
     report["summary"].append({"level": "info", "text": f"{len(ips)} IP-Adresse(n) in den DNS-Antworten erkannt."})
     if not public:
         report["summary"].append({"level": "warning", "text": "Keine ausschließlich öffentlichen DNS-Zieladressen. Verbindungen zum Ziel und Netzwerk-RDAP wurden gesperrt."})
+    if options.get("whois"):
+        add_whois(report, registered)
+        report["limitations"].append("WHOIS-Verweise werden bis zu acht weitere Dienste nach IANA verfolgt, nicht nur bis zur ersten Registrar-Antwort. Schleifen werden dedupliziert. Zeit-/Größenlimits, Verbindungsfehler und nicht unterstützte Protokolle werden als unvollständig ausgewiesen. RWHOIS ist ein anderes Protokoll und wird nicht fälschlich als WHOIS auf Port 43 abgefragt.")
     if options.get("rdap"):
         if plan.get("provider"):
-            add_rdap_section(report, "Domain-RDAP / Registrierungsdaten", plan["provider"].rstrip("/") + "/domain/" + quote(domain), plan["allowed_rdap_hosts"])
+            add_rdap_section(report, "Domain-RDAP / Registrierungsdaten", plan["provider"].rstrip("/") + "/domain/" + quote(registered), plan["allowed_rdap_hosts"], follow_domain=registered if plan.get("follow_domain_rdap") else None)
         else:
             section(report, "Domain-RDAP / Registrierungsdaten", [], status="unavailable", note="Kein freigegebener RDAP-Dienst verfügbar; siehe Abfrageplan.")
     if options.get("network"):

@@ -111,8 +111,8 @@ def resolve_public(host):
     return addresses
 
 
-def _socket(host, ip, timeout):
-    proxy_url = getproxies().get("https") if not proxy_bypass(host) else None
+def _socket(host, ip, timeout, port=443, proxy_url=None):
+    proxy_url = (proxy_url or getproxies().get("https")) if not proxy_bypass(host) else None
     if proxy_url:
         proxy = urlsplit(proxy_url)
         if proxy.scheme != "http" or not proxy.hostname:
@@ -123,7 +123,7 @@ def _socket(host, ip, timeout):
             credentials = f"{unquote(proxy.username)}:{unquote(proxy.password or '')}"
             headers["Proxy-Authorization"] = "Basic " + base64.b64encode(credentials.encode()).decode()
         connection = http.client.HTTPConnection(proxy.hostname, proxy.port or 80, timeout=timeout)
-        connection.set_tunnel(ip, 443, headers=headers)
+        connection.set_tunnel(ip, port, headers=headers)
         try:
             connection.connect()
         except Exception:
@@ -132,7 +132,19 @@ def _socket(host, ip, timeout):
         sock = connection.sock
         connection.sock = None
         return sock
-    return socket.create_connection((ip, 443), timeout=timeout)
+    return socket.create_connection((ip, port), timeout=timeout)
+
+
+def open_whois(host):
+    remaining(5)
+    addresses = resolve_public(host)
+    try:
+        return _socket(host, addresses[0], remaining(5), port=43,
+                       proxy_url=os.environ.get("WF_WHOIS_PROXY"))
+    except (OSError, http.client.HTTPException):
+        raise NetworkError("WHOIS-Verbindung auf TCP-Port 43 fehlgeschlagen, vom Proxy abgewiesen oder Zeitlimit erreicht.") from None
+    except ValueError:
+        raise NetworkError("Die WHOIS-Proxykonfiguration ist ungültig.") from None
 
 
 def open_tls(host, addresses=None, timeout=5):

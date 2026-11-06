@@ -126,7 +126,7 @@ def analyze(request):
             if query_plan["module"] != module or (module == "domain" and normalize_domain(original) != query_plan["domain"]):
                 raise ValueError("Die Eingabe hat sich geändert. Bitte den Abfrageplan neu erstellen.")
         if module == "domain":
-            with network_budget(65):
+            with network_budget(120):
                 report = analyze_domain(case, original, query_plan)
         elif module == "headers":
             with network_budget(65):

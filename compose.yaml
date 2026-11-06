@@ -1,0 +1,28 @@
+services:
+  web:
+    image: web-forensics:0.1.0
+    build: .
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WF_PORT:-8000}:8000"
+    environment:
+      WF_ALLOWED_HOSTS: "${WF_ALLOWED_HOSTS:-localhost,127.0.0.1,[::1]}"
+      WF_TRUSTED_ORIGINS: "${WF_TRUSTED_ORIGINS:-}"
+      WF_HTTPS: "${WF_HTTPS:-0}"
+      WF_WORKERS: "${WF_WORKERS:-2}"
+      WF_AUTH_ENABLED: "${WF_AUTH_ENABLED:-0}"
+      WF_AUTH_USERNAME: "${WF_AUTH_USERNAME:-admin}"
+      WF_AUTH_PASSWORD: "${WF_AUTH_PASSWORD:-}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 512m
+    memswap_limit: 512m
+    ulimits:
+      core: 0
+    logging:
+      driver: "none"

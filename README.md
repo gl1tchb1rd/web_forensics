@@ -1,1 +1,147 @@
-# web_forensics
+# Web Forensics
+
+Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein verpflichtendes Aktenzeichen in jedem Modul. Erste Programmversion: **0.1.0**.
+
+Keine Datenbank, Benutzerkonten, Berichtablage, KI-Anbindung oder Telemetrie. Alle Browserressourcen werden lokal ausgeliefert. Optionaler gemeinsamer Passwortschutz ist direkt integriert; TLS und weitere Zugangsregeln konfiguriert der Betreiber beispielsweise an seinem Reverse-Proxy.
+
+![Startseite von Web Forensics](docs/preview.png)
+
+## Start mit Docker auf Linux
+
+Voraussetzungen: Docker Engine und Docker Compose v2. Das Image wird lokal aus diesem Repository gebaut; ein veröffentlichtes Registry-Image wird nicht vorausgesetzt.
+
+```sh
+git clone https://github.com/gl1tchb1rd/web_forensics.git
+cd web_forensics
+docker compose up --build -d
+```
+
+Die Standardkonfiguration bindet ausschließlich an `127.0.0.1:8000`. Ein lokaler Browser kann die Anwendung dort öffnen. Der optionale Passwortschutz ist standardmäßig ausgeschaltet; es gibt kein voreingestelltes Passwort. Bei einem Remote-Server kann für einen ersten Test ein SSH-Tunnel verwendet werden:
+
+```sh
+ssh -L 8000:127.0.0.1:8000 benutzer@dein-server
+```
+
+Gesundheit prüfen und Anwendung stoppen:
+
+```sh
+docker compose ps
+docker compose exec web python -c "import urllib.request; print(urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:8000/healthz').read().decode())"
+docker compose down
+```
+
+### Optionaler Passwortschutz
+
+In `.env` (Vorlage: `.env.example`) oder der Containerumgebung konfigurieren:
+
+| Variable | Bedeutung | Standard |
+| --- | --- | --- |
+| `WF_AUTH_ENABLED` | `1` aktiviert, `0` deaktiviert den Passwortschutz | `0` |
+| `WF_AUTH_USERNAME` | Gemeinsamer Benutzername | `admin` |
+| `WF_AUTH_PASSWORD` | Selbst gewähltes, langes und eindeutiges Passwort | leer |
+
+Bei Aktivierung fragt der Browser per **HTTP Basic Authentication** nach Benutzername und Passwort. Alle Oberflächen, statischen Ressourcen, Abfragepläne, Analysen und PDF-Downloads sind geschützt. Ausschließlich `/healthz` bleibt für die Docker-Gesundheitsprüfung frei und liefert nur Status und Softwareversion. Es werden keine Benutzerkonten, Anmeldesitzungen oder Zugriffsprotokolle gespeichert. Der Browser sendet die Zugangsdaten bei weiteren Anfragen an dieselbe Instanz erneut; die Anwendung gibt sie nicht an externe Analysedienste weiter.
+
+Fehlt bei aktiviertem Schutz das Passwort, verweigert die Anwendung den Start. Ein leerer/ungültiger Benutzername oder ein unbekannter Schalterwert werden ebenfalls abgewiesen, statt den Schutz stillschweigend abzuschalten. Änderungen werden beim nächsten Containerstart geladen; nach einer Änderung in `.env` den Container mit aktualisierter Umgebung neu erstellen:
+
+```sh
+docker compose up --build -d --force-recreate
+```
+
+Zum Abschalten `WF_AUTH_ENABLED=0` setzen und ebenfalls neu erstellen. Ein bloßes `docker compose restart` übernimmt geänderte Umgebungsvariablen nicht. `.env` gehört nicht ins Git-Repository (bereits ignoriert); Dateizugriff beispielsweise mit `chmod 600 .env` auf den Betreiber beschränken. Passwörter mit `$`, `#` oder Leerzeichen in Compose-`.env` in einfache Anführungszeichen setzen, damit sie wörtlich gelesen werden.
+
+HTTP Basic verschlüsselt die Zugangsdaten nicht selbst. Für entfernten Zugriff HTTPS oder einen SSH-Tunnel verwenden. Die Browser speichern Basic-Zugangsdaten vorübergehend selbst; die Anwendung hat keinen verlässlichen Abmeldeknopf. Zum Beenden die Browser-Anmeldedaten löschen bzw. ein separates privates Browserfenster vollständig schließen. Die Bereinigung der Analyseergebnisse nach dem PDF-Download bleibt unabhängig davon aktiv. Es handelt sich um einen gemeinsamen Zugang, ohne Rollen oder individuelle Konten; ergänzende Begrenzung von Anmeldeversuchen kann am Reverse-Proxy erfolgen.
+
+### Betrieb hinter einem Reverse-Proxy
+
+`.env.example` nach `.env` kopieren und die eigene HTTPS-Domain in `WF_ALLOWED_HOSTS` und `WF_TRUSTED_ORIGINS` eintragen. `WF_HTTPS=1` setzt das CSRF-Cookie auf Secure. Die Hostliste muss `127.0.0.1` für die Container-Gesundheitsprüfung enthalten.
+
+Der Reverse-Proxy muss den öffentlichen `Host` erhalten und kann an den lokalen Port 8000 weiterleiten. Bei Nutzung des integrierten Passwortschutzes muss er außerdem den `Authorization`-Header durchreichen. Schreibzugriffe auf Disk, Access-/Error-Logs, Request-Body-Dumps, Tracing, Caching und Antwortpuffer auf Disk müssen dort entsprechend deaktiviert werden. Ein Request-Limit von 2 MiB und ein Upstream-Zeitlimit von 150 Sekunden passen zur Anwendung. Zusätzliche Authentifizierung und gegebenenfalls Rate Limits können am Proxy eingerichtet werden. Öffentliches HTTPS wird am Proxy terminiert; die Anwendung vertraut nicht pauschal eingehenden Forwarded-Headern.
+
+Der Container läuft als UID/GID `10001`, mit schreibgeschütztem Root-Dateisystem, ohne zusätzliche Capabilities, ohne persistente Volumes und ohne Docker-Protokollierung. Gunicorn nutzt `/dev/shm` nur für seine Worker-Verwaltung. Das Speicherlimit beträgt 512 MiB, zusätzlicher Container-Swap und Core-Dumps sind in Compose deaktiviert. Die tatsächlichen Host-Funktionen müssen diese Einstellungen unterstützen.
+
+### Eigenes Logo
+
+Die Chat-Vorschau des Logos ist nicht als Bilddatei im Repository vorhanden. Bis die Originaldatei hinterlegt ist, wird ein lokaler Schriftzug in Türkis/Magenta angezeigt. Ein PNG unter `static/brand/logo.png` ablegen und das Image neu bauen; die Oberfläche bindet es automatisch ein. `static/brand/` bei Bedarf selbst anlegen. Alternativ die PNG-Datei beim Containerstart schreibgeschützt an `/app/static/brand/logo.png` mounten. In PDF-Berichten bleibt der Kopf bewusst typografisch und sachlich.
+
+## Module
+
+### Domainanalyse
+
+- DNS: A, AAAA, NS, MX, TXT, SOA, CAA, jeweils mit TTL und Ergebnisstatus.
+- Domainregistrierung: RDAP anhand des IANA-Verzeichnisses, einschließlich verfügbarer Registrar-/Kontaktrollen, Status und Datumsangaben.
+- Netzwerkregistrierung: zuständiges RIR über das IANA-IP-Verzeichnis, bis zu drei öffentliche IPs, Netzbereich und veröffentlichte Betreiberangaben.
+- TLS: geprüfter Hostname und System-Vertrauenskette, Gültigkeit, Aussteller, SAN-Domains, ausgehandeltes TLS/Cipher und SHA-256-Fingerabdruck des Serverzertifikats.
+- HTTPS: HEAD-Anfrage, Status, Weiterleitungsziel und ausgewählte Antwort-/Sicherheitsheader. Weiterleitungen werden **nicht** verfolgt; keine Seiteninhalte oder Skripte geladen.
+
+DNS ist immer aktiv. Die übrigen Bereiche sind einzeln abwählbar. Vor dem Start wird ein Abfrageplan erstellt. Das Ermitteln der RDAP-Dienste kann bereits öffentliche IANA-Verzeichnisse laden; das wird vor dem Plan-Button ausgewiesen. Der Plan zeigt die Domain-Registry und die möglichen RIR-Dienste vor der Zustimmung. Im Report sind die tatsächlich angefragten Quellen dokumentiert. Ein nicht verfügbarer Dienst wird ausdrücklich als nicht verfügbar ausgewiesen und gilt nicht als unauffälliges Ergebnis.
+
+Externe Abfragen erhalten ein gemeinsames Zeitbudget (40 Sekunden für den Plan, 65 Sekunden für die Analyse), zusätzlich zu den einzelnen DNS-, Verbindungs- und Antwortlimits. Bereits laufende Socketoperationen können noch bis zu ihrem kurzen Einzelzeitlimit auslaufen.
+
+Dies ist **kein** vollständiger TLS-Schwachstellenscan, keine ASN-/BGP- oder Geolokalisierungsanalyse und keine eigenständige DNSSEC-/OCSP-/CRL-Prüfung. Klassisches Port-43-WHOIS ist in dieser Version nicht implementiert; die Registrierungsabfragen erfolgen über RDAP. Für Subdomains bieten Registrierungsdienste regelmäßig keinen eigenen Datensatz an. Es wird nicht stillschweigend eine vermeintliche registrierte Basisdomain geraten.
+
+### E-Mail-Header-Analyse
+
+- Absenderfelder und Unterschiede zwischen From, Reply-To und Return-Path.
+- Received-Stationen in behaupteter zeitlicher Reihenfolge, UTC-Zeitstempel und Zeitwidersprüche.
+- Vorhandene Authentication-Results, ARC-Authentication-Results, Received-SPF und DKIM-Signature.
+- IP-Adressen aus Received und X-Originating-IP, doppelte oder fehlende wichtige Felder und Parserfehler.
+- Originaleingabe und deren SHA-256-Prüfsumme im Bericht.
+
+Standardmäßig vollständig ohne externe Abfragen. Optional können maximal drei öffentliche Header-IP-Adressen mit Netzwerk-RDAP ergänzt werden; dafür ist ein bestätigter Abfrageplan erforderlich. Der vollständige Header wird nicht an diese Dienste gesendet. Nur Header einfügen, keine Nachrichtentexte oder Anhänge. Eingaben mit Nachrichtentext werden abgewiesen. Maximal 64 KiB UTF-8-Eingabe und 1500 Zeilen.
+
+Eingetragene SPF-/DKIM-/DMARC-Ergebnisse sind **unverifizierte Behauptungen des Headers**. Die Anwendung kennt keine vertrauenswürdige Empfangsgrenze und bestätigt diese Ergebnisse nicht. Eine vollständige DKIM-Prüfung benötigt auch den Nachrichteninhalt. Received-Felder belegen keinen tatsächlichen Urheber oder Standort.
+
+## Datenfluss und Grenzen der flüchtigen Verarbeitung
+
+1. Eingaben werden ausschließlich per POST zur eigenen Installation übertragen, niemals als Suchparameter in URLs.
+2. Der Server verarbeitet die Analyse im RAM und liefert Ergebnisse mit einem signierten, vollständigen Berichtspaket an die Browserseite zurück. Die Signatur schützt den PDF-Endpunkt vor manipulierten Berichtsdaten; sie ist keine digitale Beweissignatur und keine Verschlüsselung.
+3. Der Server hält kein Untersuchungsarchiv und keinen Berichtcache. Nur öffentliche IANA-Anbieterlisten werden pro Prozess gecacht. Auf dem Server werden keine Eingaben oder Berichte als Dateien angelegt.
+4. Beim PDF-Download sendet die Browserseite das Berichtspaket per POST an dieselbe Instanz. Das PDF entsteht in einem Speicherpuffer und wird direkt ausgeliefert.
+5. Nach dem Start des Downloads sowie beim Verlassen der Ergebnisansicht werden die Formularfelder, Ergebnisse und das Berichtspaket aus der Browseransicht entfernt. Die Anwendung verwendet weder Local Storage noch IndexedDB oder einen Service Worker. Antworten tragen `Cache-Control: no-store`. Ein zufälliges CSRF-Cookie schützt POST-Anfragen und enthält keine Untersuchungsdaten.
+
+PDF-Pakete sind maximal 30 Minuten gültig; Abfragepläne zehn Minuten. Der Signaturschlüssel entsteht beim Start einmal im Gunicorn-Masterprozess und wird mit `preload_app` an die Worker vererbt. Ein Neustart macht offene Berichte ungültig. Für mehrere unabhängig gestartete Replikate wäre ein gemeinsamer, zufälliger `WF_SECRET_KEY` erforderlich. Ein Single-Container-Betrieb benötigt keine Schlüsselkonfiguration.
+
+Das Freigeben von Referenzen garantiert kein sofortiges Überschreiben sämtlicher RAM-Kopien. Browser/Erweiterungen, Host-Swap, Speicherabbilder, Hypervisoren, Reverse-Proxys und heruntergeladene Dateien kann die Anwendung nicht kontrollieren. Ein abgebrochener Browserrequest beendet laufende Netzwerkabfragen nicht zwingend sofort; diese sind begrenzt und speichern keine Ergebnisse. Ein gestarteter Download bestätigt nicht, dass der Benutzer die Datei tatsächlich gespeichert hat.
+
+Anwendung und Gunicorn schreiben keine Zugriffs-, Fehler- oder Analyseprotokolle. Die mitgelieferte Compose-Datei deaktiviert zusätzlich den Docker-Logging-Treiber. Das betrifft den laufenden Dienst, nicht Paketinstallations- und Build-Ausgaben oder vom Betreiber zusätzlich eingesetzte Systeme.
+
+## Externe Ziele
+
+| Zweck | Empfänger | Übermittelte Daten |
+| --- | --- | --- |
+| DNS | Resolver aus Container-/Hostkonfiguration; rekursive Weitergabe möglich | Domain-/Dienstnamen, Recordtyp |
+| Anbieterlisten | `data.iana.org/rdap/dns.json`, `ipv4.json`, `ipv6.json` | Keine Untersuchungsdaten; statische Verzeichnisabfrage |
+| Domain-RDAP | Zuständige Registry laut Abfrageplan | Vollständige eingegebene Domain |
+| Netzwerk-RDAP | Zuständiges RIR laut Abfrageplan, z. B. ARIN/RIPE/APNIC/LACNIC/AFRINIC | Einzelne öffentliche IP-Adresse |
+| TLS/HTTPS | Öffentliche IP der Zieldomain, Port 443 | SNI/Host, Standard-User-Agent und HEAD-Anfrage an `/` |
+
+Alle externen Verbindungen offenbaren auch die Absender-IP der Installation bzw. des konfigurierten Proxys. Aktenzeichen und vollständige Header gehen nicht an diese Dienste. Eigene DNS-Resolver können über `WF_DNS_RESOLVERS` als kommagetrennte IPs festgelegt werden (in Compose bei Bedarf zusätzlich eintragen). Ausgehende DNS-Verbindungen und HTTPS müssen beim jeweiligen Betreiber erlaubt sein.
+
+HTTPS respektiert konfigurierte `HTTPS_PROXY`-/`NO_PROXY`-Einstellungen und `SSL_CERT_FILE`. Für TLS-Proxys muss ein passendes, vertrauenswürdiges CA-Bundle schreibgeschützt eingebunden werden. Verifikation wird nicht abgeschaltet. HTTP-CONNECT-Proxys müssen Tunnel zu geprüften öffentlichen **IP-Adressen** erlauben; SNI und Zertifikatsprüfung verwenden weiter den ursprünglichen Hostnamen. Hostnamen-basierte Egress-Allowlists können dies einschränken. Die Anwendung wechselt in diesem Fall nicht auf einen unsicheren Verbindungspfad.
+
+Private, lokale, reservierte und spezielle IPv6-Übergangsadressen werden für Zielverbindungen gesperrt. Gemischte öffentliche/private DNS-Antworten führen zur Sperre. Verbindungen verwenden die zuvor geprüfte IP, um DNS-Rebinding zwischen Prüfung und Verbindungsaufbau zu vermeiden. RDAP-Weiterleitungen sind auf im Plan ausgewiesene Anbieter beschränkt. Betreiber sollten ergänzend den Netzwerkzugriff des Containers auf interne Infrastruktur beschränken.
+
+## Entwicklung und Tests
+
+Python 3.12 oder neuer:
+
+```sh
+python -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python manage.py check
+.venv/bin/python manage.py test tests
+.venv/bin/gunicorn --config gunicorn.conf.py webforensics.wsgi:application
+```
+
+Keine Migrationen oder Datenbankeinrichtung nötig. `requirements.in` enthält die direkten, `requirements.txt` sämtliche festgeschriebenen Laufzeitabhängigkeiten. `requirements-dev.txt` ergänzt PDF- und Browsertestwerkzeuge. Der Entwicklungsstart nutzt ebenfalls die Gunicorn-Konfiguration ohne Logging; Djangos `runserver` ist für den zugesagten Betrieb ohne Zugriffslogs nicht vorgesehen.
+
+Automatische Tests prüfen Offline-Verarbeitung, Headerbefunde, SSRF-Sperren, IP-Pinning/SNI, Abfragepläne, Redirect-Grenzen, Pflichtfelder, CSRF, Berichtsintegrität, PDF-Inhalte, Mehrseitenberichte und den optionalen Passwortschutz. Netzwerkantworten werden in den deterministischen Tests kontrolliert simuliert; das ist kein Nachweis der Verfügbarkeit aller externen Anbieter. Ein Browsertest gegen einen laufenden Dienst ist mit `tests/browser_smoke.py` möglich (System-Chromium oder `playwright install chromium` erforderlich). Bei aktiviertem Passwortschutz dafür `WF_TEST_AUTH_USERNAME` und `WF_TEST_AUTH_PASSWORD` in der Testumgebung setzen; die Werte werden nicht ausgegeben.
+
+## Weitere Module ergänzen
+
+Die Analysefunktionen sind von Oberfläche, HTTP-Endpunkten und PDF-Renderer getrennt. Neue Module können unter `forensics/` das gemeinsame Reportformat aus `forensics/report.py` verwenden. Anschließend Eingabevalidierung und Modulrouting in `webforensics/views.py`, eine Kachel/Eingabemaske in `templates/index.html` und die Bedienlogik in `static/app.js` ergänzen. Das Aktenzeichen wird zentral validiert; alle Module müssen Aussagegrenzen, Quellen und externe Empfänger dokumentieren. Der PDF-Renderer verarbeitet das gemeinsame Abschnittsformat.
+
+## Lizenz und Betrieb
+
+GPL-3.0 gemäß [LICENSE](LICENSE). Die Anwendung dient der technischen Dokumentation und liefert keine abschließende rechtliche Bewertung oder Garantie gerichtlicher Verwertbarkeit. Der Betreiber entscheidet über berechtigten Einsatz, Zugang, Serverstandort und die für seine Installation erforderlichen Datenschutzinformationen. Eine Lizenz oder ein Hinweis ersetzt keine technische Betriebskonfiguration.

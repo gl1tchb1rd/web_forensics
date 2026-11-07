@@ -15,6 +15,8 @@ from urllib.request import getproxies, proxy_bypass
 import dns.exception
 import dns.resolver
 
+from webforensics import __version__
+
 
 class NetworkError(Exception):
     pass
@@ -181,7 +183,7 @@ def fetch_https(url, method="GET", addresses=None, limit=1024 * 1024):
     try:
         connection.sock = open_tls(parsed.hostname, addresses)
         connection.request(method, parsed.path + ("?" + parsed.query if parsed.query else ""), headers={
-            "Host": parsed.hostname, "User-Agent": "WebForensics/0.1", "Accept": "application/rdap+json, application/json, */*",
+            "Host": parsed.hostname, "User-Agent": f"WebForensics/{__version__}", "Accept": "application/rdap+json, application/json, */*",
             "Accept-Encoding": "identity", "Connection": "close",
         })
         response = connection.getresponse()

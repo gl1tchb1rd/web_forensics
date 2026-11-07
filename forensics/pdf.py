@@ -31,6 +31,8 @@ def render_pdf(report):
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle("BodyWF", fontName="WF", fontSize=9, leading=13, spaceAfter=6, wordWrap="CJK"))
     styles.add(ParagraphStyle("SmallWF", parent=styles["BodyWF"], fontSize=7.5, leading=10, textColor=colors.HexColor("#444444")))
+    styles.add(ParagraphStyle("SectionMetaWF", parent=styles["SmallWF"], keepWithNext=True))
+    styles.add(ParagraphStyle("SectionNoteWF", parent=styles["BodyWF"], keepWithNext=True))
     styles.add(ParagraphStyle("TitleWF", fontName="WF-Bold", fontSize=23, leading=29, spaceAfter=8))
     styles.add(ParagraphStyle("HeadingWF", fontName="WF-Bold", fontSize=12, leading=17, spaceBefore=14, spaceAfter=8, keepWithNext=True))
     styles.add(ParagraphStyle("RawWF", parent=styles["SmallWF"], fontSize=7, leading=10, alignment=TA_LEFT, spaceAfter=1))
@@ -72,7 +74,7 @@ def render_pdf(report):
     for item in report["summary"]:
         label = {"warning": "Auffälligkeit", "notice": "Hinweis", "info": "Feststellung"}.get(item["level"], "Hinweis")
         story.append(p(f"{label}: {item['text']}"))
-    heading("2. Prüfverfahren und Aussagegrenzen")
+    heading("2. Grundlage und Einordnung" if report["module"] == "headers" else "2. Prüfverfahren und Aussagegrenzen")
     for limitation in report["limitations"]:
         story.append(p("• " + limitation))
     heading("3. Einzelergebnisse")
@@ -81,11 +83,12 @@ def render_pdf(report):
         if item["title"] == "Übermittelter Originalheader":
             continue
         heading(f"3.{index} {item['title']}")
-        story.append(p("Prüfstatus: " + status_names.get(item["status"], item["status"]), "SmallWF"))
+        meta_style = "SectionMetaWF" if item["rows"] else "SmallWF"
+        story.append(p("Prüfstatus: " + status_names.get(item["status"], item["status"]), meta_style))
         if item["source"]:
-            story.append(p("Quelle: " + item["source"], "SmallWF"))
+            story.append(p("Quelle: " + item["source"], meta_style))
         if item["note"]:
-            story.append(p(item["note"]))
+            story.append(p(item["note"], "SectionNoteWF" if item["rows"] else "BodyWF"))
         for label, value in item["rows"]:
             story.append(Paragraph(f"<b>{safe(label)}</b><br/>{safe(value).replace(chr(10), '<br/>')}", styles["BodyWF"]))
     heading("4. Datenquellen und externe Abfragen")

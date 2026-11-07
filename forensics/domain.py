@@ -1,4 +1,6 @@
+import csv
 import hashlib
+import io
 import ipaddress
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -18,6 +20,10 @@ from .whois import add_whois
 from .rdap_chain import walk_domain_rdap
 
 OPTIONS = ("rdap", "whois", "network", "tls", "http")
+REGISTRAR_DIRECTORY = "https://www.iana.org/assignments/registrar-ids/registrar-ids-1.csv"
+# DENIC documents this service separately; .de is absent from the DNS bootstrap.
+# https://www.denic.de/services/whois-service/rdap-service/
+DOMAIN_RDAP_SERVICES = {"de": "https://rdap.denic.de/"}
 
 
 @lru_cache(maxsize=3)
@@ -35,10 +41,45 @@ def bootstrap(kind):
 
 def domain_provider(domain):
     tld = domain.rsplit(".", 1)[-1]
+    if tld in DOMAIN_RDAP_SERVICES:
+        return DOMAIN_RDAP_SERVICES[tld]
     for names, urls in bootstrap("dns"):
         if tld in names:
             return next((u for u in urls if u.startswith("https://")), None)
     return None
+
+
+def https_rdap_url(value):
+    if not isinstance(value, str) or any(ord(c) < 33 for c in value):
+        return False
+    try:
+        parsed = urlsplit(value)
+        return (parsed.scheme == "https" and bool(parsed.hostname) and parsed.port in (None, 443)
+                and not parsed.username and not parsed.password and not parsed.fragment and not parsed.query)
+    except ValueError:
+        return False
+
+
+@lru_cache(maxsize=1)
+def registrar_directory():
+    status, _, body = fetch_https(REGISTRAR_DIRECTORY)
+    if status != 200:
+        raise NetworkError(f"IANA-Registrarverzeichnis nicht verfügbar (HTTP {status}).")
+    try:
+        records = csv.DictReader(io.StringIO(body.decode("utf-8-sig")))
+        if not {"ID", "Status", "RDAP Base URL"}.issubset(records.fieldnames or []):
+            raise ValueError
+        providers = {}
+        for record in records:
+            identifier = (record.get("ID") or "").strip()
+            url = (record.get("RDAP Base URL") or "").strip()
+            if (record.get("Status") or "").strip() == "Accredited" and identifier.isdigit() and https_rdap_url(url):
+                providers[identifier] = url.rstrip("/") + "/"
+        if not providers:
+            raise ValueError
+        return providers
+    except (ValueError, UnicodeError, csv.Error):
+        raise NetworkError("Ungültige Antwort des IANA-Registrarverzeichnisses.") from None
 
 
 def network_provider(ip):
@@ -54,7 +95,7 @@ def network_provider(ip):
 
 def make_plan(module, domain="", options=None):
     options = options or {}
-    plan = {"module": module, "domain": normalize_domain(domain) if module == "domain" else "", "options": {key: bool(options.get(key)) for key in OPTIONS}, "recipients": [], "errors": [], "provider": None, "allowed_rdap_hosts": []}
+    plan = {"module": module, "domain": normalize_domain(domain) if module == "domain" else "", "options": {key: bool(options.get(key)) for key in OPTIONS}, "recipients": [], "errors": [], "provider": None, "allowed_rdap_hosts": [], "registrars": {}}
     if module == "domain":
         registered, warning = registration_domain(plan["domain"]) if (options.get("rdap") or options.get("whois")) else (plan["domain"], "")
         plan["registration_domain"] = registered
@@ -76,6 +117,14 @@ def make_plan(module, domain="", options=None):
                     plan["errors"].append("Für diese Domainendung ist kein HTTPS-RDAP-Dienst im IANA-Verzeichnis gefunden worden.")
             except NetworkError as exc:
                 plan["errors"].append(str(exc))
+            if plan["provider"] and not plan["registration_domain"].endswith(".de"):
+                try:
+                    plan["registrars"] = registrar_directory()
+                    hosts = sorted({urlsplit(u).hostname for u in plan["registrars"].values()})
+                    plan["allowed_rdap_hosts"].extend(hosts)
+                    recipients.append(["Registrar-RDAP (nur der zuständige Anbieter)", ", ".join(hosts), "Registrierungsdomain an den über seine IANA-ID benannten zuständigen Registrar, falls kein RDAP-Link vorliegt. Weitere Domainverweise bleiben auf die ausgewiesene Abfragekette begrenzt. Kein Aktenzeichen."])
+                except NetworkError as exc:
+                    plan["errors"].append("Registrar-Ergänzung nicht verfügbar; die Registry-Abfrage bleibt möglich. " + str(exc))
         if options.get("whois"):
             recipients.append(["Klassische WHOIS-Abfragekette (unverschlüsselt, TCP 43)",
                                "whois.iana.org → dort genannte Registry-/Registrar-WHOIS-Dienste und deren weitere WHOIS-Verweise (öffentliche Ziele, TCP 43)",
@@ -97,6 +146,8 @@ def make_plan(module, domain="", options=None):
             plan["errors"].append(str(exc))
     if options.get("rdap") or options.get("network"):
         recipients.append(["RDAP-Dienstverzeichnis", "data.iana.org", "Abruf öffentlicher Anbieterlisten dns.json / ipv4.json / ipv6.json. Keine Untersuchungsdaten; Verzeichnis wird im Prozess zwischengespeichert."])
+    if plan["registrars"]:
+        recipients.append(["Registrar-Dienstverzeichnis", "www.iana.org", "Abruf der öffentlichen Registrar-IDs und RDAP-Basisadressen. Keine Untersuchungsdaten; Verzeichnis wird im Prozess zwischengespeichert."])
     return plan
 
 
@@ -124,30 +175,90 @@ def get_rdap(url, allowed_hosts):
     raise NetworkError("Zu viele RDAP-Weiterleitungen.")
 
 
+def rdap_text(value):
+    if isinstance(value, list):
+        return ", ".join(filter(None, (rdap_text(item) for item in value)))
+    return "" if value is None else str(value)
+
+
+def rdap_list(data, key, limit=20):
+    value = data.get(key)
+    return value[:limit] if isinstance(value, list) else []
+
+
+def rdap_notices(data):
+    rows = []
+    for key, label in (("notices", "Hinweis"), ("remarks", "Anmerkung"), ("redacted", "Redigierte Angabe")):
+        for notice in rdap_list(data, key):
+            if not isinstance(notice, dict):
+                continue
+            if key == "redacted":
+                parts = [rdap_text(notice.get(part, {}).get("description") or notice.get(part, {}).get("type", ""))
+                         for part in ("name", "reason") if isinstance(notice.get(part), dict)]
+            else:
+                parts = [rdap_text(notice.get("title", "")), rdap_text(notice.get("description", ""))]
+            value = " / ".join(filter(None, parts))
+            if value:
+                rows.append([label, value])
+    return rows
+
+
+def rdap_entities(data):
+    pending = [(entity, 1) for entity in reversed(rdap_list(data, "entities"))]
+    count = 0
+    while pending and count < 80:
+        entity, depth = pending.pop()
+        if not isinstance(entity, dict):
+            continue
+        yield entity
+        count += 1
+        if depth < 4:
+            pending.extend((child, depth + 1) for child in reversed(rdap_list(entity, "entities")))
+
+
 def rdap_rows(data):
     rows = []
     for key, label in (("ldhName", "Domain"), ("handle", "Kennung"), ("name", "Netzname"), ("type", "Typ"), ("startAddress", "Netzanfang"), ("endAddress", "Netzende"), ("country", "Land laut Registrierungsdatensatz"), ("port43", "WHOIS-Dienst laut RDAP")):
         if key in data:
             rows.append([label, str(data[key])])
-    if data.get("status"):
-        rows.append(["Status", ", ".join(map(str, data["status"]))])
-    for event in data.get("events", [])[:20]:
-        rows.append([str(event.get("eventAction", "Ereignis")), str(event.get("eventDate", ""))])
-    for entity in data.get("entities", [])[:20]:
-        label = ", ".join(map(str, entity.get("roles", []))) or "Kontakt"
+    if rdap_list(data, "status"):
+        rows.append(["Status", rdap_text(rdap_list(data, "status"))])
+    for event in rdap_list(data, "events"):
+        if isinstance(event, dict):
+            rows.append([str(event.get("eventAction", "Ereignis")), str(event.get("eventDate", ""))])
+    for nameserver in rdap_list(data, "nameservers", 32):
+        if isinstance(nameserver, dict) and nameserver.get("ldhName"):
+            rows.append(["Nameserver", str(nameserver["ldhName"])])
+    for entity in rdap_entities(data):
+        label = rdap_text(rdap_list(entity, "roles")) or "Kontakt"
         names = [str(entity.get("handle", ""))]
         card = entity.get("vcardArray", [])
-        if len(card) > 1 and isinstance(card[1], list):
+        details = []
+        if isinstance(card, list) and len(card) > 1 and isinstance(card[1], list):
             for entry in card[1]:
-                if isinstance(entry, list) and len(entry) > 3 and entry[0] in ("fn", "org"):
-                    names.append(str(entry[3]))
-        rows.append([label, " / ".join(n for n in names if n)])
+                if not isinstance(entry, list) or len(entry) < 4:
+                    continue
+                if entry[0] in ("fn", "org"):
+                    names.append(rdap_text(entry[3]))
+                elif entry[0] in ("email", "tel", "adr"):
+                    value = rdap_text(entry[3])
+                    if entry[0] == "adr" and isinstance(entry[1], dict):
+                        value = rdap_text(entry[1].get("label")) or value
+                    if value:
+                        details.append([label + " / " + {"email": "E-Mail", "tel": "Telefon", "adr": "Anschrift"}[entry[0]], value])
+        rows.append([label, " / ".join(dict.fromkeys(n for n in names if n)) or "Keine öffentlichen Kontaktangaben im RDAP-Datensatz."])
+        rows.extend(details)
+        rows.extend(rdap_notices(entity))
+    rows.extend(rdap_notices(data))
+    if data.get("ldhName") and not any("registrant" in rdap_list(entity, "roles") for entity in rdap_entities(data)):
+        rows.append(["Domaininhaber", "Kein öffentlicher Inhaberkontakt in dieser RDAP-Antwort. Weiterführende Registrar-Daten und Hinweise gegebenenfalls in separaten Abschnitten; fehlende Angaben belegen keine Datenschutzsperre."])
     return rows
 
 
-def add_rdap_section(report, title, url, allowed_hosts, follow_domain=None):
+def add_rdap_section(report, title, url, allowed_hosts, follow_domain=None, domain=None, plan=None):
     if follow_domain:
-        chain = walk_domain_rdap(url, follow_domain, allowed_hosts, fetch_https)
+        lookup = (lambda data: registrar_query(data, follow_domain, plan)) if plan else None
+        chain = walk_domain_rdap(url, follow_domain, allowed_hosts, fetch_https, registrar_lookup=lookup)
         section(report, "RDAP-Abfragekette", [["Abgefragte Adressen", "\n".join(step["url"] for step in chain["steps"])],
                 ["Ende / Abbruch", chain["reason"]], ["Offene Adressen", "\n".join(chain["pending"]) or "Keine"]],
                 status="ok" if chain["complete"] else "unavailable", note="Registry- und Registrar-Antworten sowie HTTP-Weiterleitungen werden einzeln erhalten. Doppelte Verweise werden nicht erneut abgefragt.")
@@ -169,14 +280,59 @@ def add_rdap_section(report, title, url, allowed_hosts, follow_domain=None):
         return
     try:
         data, body, final_url = get_rdap(url, allowed_hosts)
+        if data.get("errorCode") or (domain is not None and normalize_domain(data.get("ldhName", "")) != domain):
+            raise NetworkError("RDAP-Antwort enthält keinen passenden Domain-Datensatz.")
         raw = body.decode("utf-8", "replace")
         section(report, title, rdap_rows(data), raw=raw, source=final_url,
                 note="Registrierungsdaten, keine Bestätigung des tatsächlichen Nutzers oder physischen Standorts. SHA-256 der HTTPS-Antwort: " + hashlib.sha256(body).hexdigest())
         report["sources"].append(final_url)
+        return data, final_url
     except NetworkError as exc:
         section(report, title, [], status="unavailable", note=str(exc), source=url)
     except (ValueError, TypeError, KeyError, AttributeError, IndexError):
         section(report, title, [], status="unavailable", note="RDAP-Abfrage fehlgeschlagen, Antwort ungültig oder außerhalb des freigegebenen Abfrageplans.", source=url)
+    return None
+
+
+def registrar_query(data, domain, plan):
+    # Use the registrar's public IANA ID rather than following arbitrary links.
+    # Every possible destination was loaded and disclosed before consent.
+    for entity in rdap_entities(data):
+        if "registrar" not in rdap_list(entity, "roles"):
+            continue
+        for identifier in rdap_list(entity, "publicIds"):
+            if isinstance(identifier, dict) and str(identifier.get("type", "")).lower() == "iana registrar id":
+                provider = plan.get("registrars", {}).get(str(identifier.get("identifier", "")))
+                if provider and https_rdap_url(provider) and urlsplit(provider).hostname in plan["allowed_rdap_hosts"]:
+                    return provider.rstrip("/") + "/domain/" + quote(domain)
+    # Some registries supply only an RFC 9083 related link. Accept an exact
+    # domain lookup at a base address already present in the approved directory.
+    for link in rdap_list(data, "links"):
+        if not isinstance(link, dict) or link.get("rel") != "related" or str(link.get("type", "")).split(";", 1)[0].lower() != "application/rdap+json":
+            continue
+        url = link.get("href")
+        if not https_rdap_url(url):
+            continue
+        for provider in set(plan.get("registrars", {}).values()):
+            if url == provider.rstrip("/") + "/domain/" + quote(domain) and urlsplit(url).hostname in plan["allowed_rdap_hosts"]:
+                return url
+    return None
+
+
+def add_domain_registration(report, domain, plan):
+    provider = plan.get("provider")
+    if not provider:
+        section(report, "Domain-RDAP / Registrierungsdaten", [], status="unavailable", note="Kein freigegebener RDAP-Dienst verfügbar; siehe Abfrageplan.")
+        return
+    result = add_rdap_section(report, "Domain-RDAP / Registrierungsdaten", provider.rstrip("/") + "/domain/" + quote(domain), plan["allowed_rdap_hosts"], domain=domain, follow_domain=domain if plan.get("follow_domain_rdap") else None, plan=plan)
+    if result:
+        data, final_url = result
+        registrar = registrar_query(data, domain, plan)
+        if registrar and registrar != final_url:
+            add_rdap_section(report, "Registrar-RDAP / Kontakte und Datenschutzhinweise", registrar, plan["allowed_rdap_hosts"], domain=domain)
+    if domain.endswith(".de"):
+        report["limitations"].append("DENIC-RDAP liefert wie das öffentliche Port-43-WHOIS technische Daten. Öffentlich verfügbare Inhaberdaten juristischer Personen (z. B. Vereinsnamen) werden separat im DENIC-Web-WHOIS veröffentlicht und hier nicht automatisch abgerufen. Aus fehlenden Inhaberdaten ist kein Datenschutzstatus ableitbar.")
+        section(report, "DENIC-Web-WHOIS / Inhaberauskunft", [["Manuelle Abfrage", "https://webwhois.denic.de/"], ["Domain", domain]], status="unavailable", note="Inhaberdaten nicht automatisch abgefragt. Für öffentlich verfügbare Organisations- und Vereinsnamen die Domain im DENIC-Web-WHOIS prüfen. Der Link ist ein weiterführender Hinweis, keine abgefragte Quelle.")
 
 
 def add_networks(report, ips, allowed_hosts=None):
@@ -239,7 +395,7 @@ def analyze_domain(case, original, plan):
     report["sources"].append("DNS-Resolver der Installation: " + resolver_description())
     report["limitations"] += [
         "Momentaufnahme zum Abfragezeitpunkt. DNS- und Registrierungsdaten können sich ändern; DNSSEC wird nicht eigenständig validiert.",
-        "RDAP und klassisches WHOIS dokumentieren veröffentlichte Registrierungsangaben. Verdeckte, gelöschte oder nicht veröffentlichte Angaben können nicht ermittelt werden.",
+        "RDAP und klassisches WHOIS dokumentieren veröffentlichte Registrierungsangaben einschließlich gelieferter Datenschutz- und Redigierungshinweise. Verdeckte, gelöschte oder nicht veröffentlichte Angaben können nicht ermittelt werden.",
         "Registrierungsabfragen verwenden die registrierbare Basisdomain aus dem mitgelieferten Public-Suffix-Snapshot (ohne automatischen Listendownload). DNS, TLS und HTTPS untersuchen weiterhin die eingegebene Domain.",
         "Netzwerk-RDAP auf maximal drei öffentliche IP-Adressen begrenzt; TLS und HTTPS prüfen die erste öffentliche DNS-Adresse. Keine ASN-/BGP-Zuordnung und keine Standortermittlung.",
         "Ein verifiziertes TLS-Zertifikat ist kein Nachweis der Seriosität eines Angebots.",
@@ -262,10 +418,9 @@ def analyze_domain(case, original, plan):
         add_whois(report, registered)
         report["limitations"].append("WHOIS-Verweise werden bis zu acht weitere Dienste nach IANA verfolgt, nicht nur bis zur ersten Registrar-Antwort. Schleifen werden dedupliziert. Zeit-/Größenlimits, Verbindungsfehler und nicht unterstützte Protokolle werden als unvollständig ausgewiesen. RWHOIS ist ein anderes Protokoll und wird nicht fälschlich als WHOIS auf Port 43 abgefragt.")
     if options.get("rdap"):
-        if plan.get("provider"):
-            add_rdap_section(report, "Domain-RDAP / Registrierungsdaten", plan["provider"].rstrip("/") + "/domain/" + quote(registered), plan["allowed_rdap_hosts"], follow_domain=registered if plan.get("follow_domain_rdap") else None)
-        else:
-            section(report, "Domain-RDAP / Registrierungsdaten", [], status="unavailable", note="Kein freigegebener RDAP-Dienst verfügbar; siehe Abfrageplan.")
+        if plan.get("registrars"):
+            report["sources"].append(REGISTRAR_DIRECTORY + " (Dienstverzeichnis laut Abfrageplan)")
+        add_domain_registration(report, registered, plan)
     if options.get("network"):
         if public:
             add_networks(report, ips, plan["allowed_rdap_hosts"])

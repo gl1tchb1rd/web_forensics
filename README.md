@@ -1,6 +1,6 @@
 # Web Forensics
 
-Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein verpflichtendes Aktenzeichen in jedem Modul. Programmversion: **0.3.0** (Entwicklungsstand bis zur Veröffentlichung eines Releases).
+Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein verpflichtendes Aktenzeichen in jedem Modul. Programmversion: **0.4.0**. Änderungen: [Versionshinweise](CHANGELOG.md).
 
 Keine Datenbank, Benutzerkonten, Berichtablage, KI-Anbindung oder Telemetrie. Alle Browserressourcen werden lokal ausgeliefert. Optionaler gemeinsamer Passwortschutz ist direkt integriert; TLS und weitere Zugangsregeln konfiguriert der Betreiber beispielsweise an seinem Reverse-Proxy.
 
@@ -122,20 +122,20 @@ Der Block im bestehenden Checkout stoppt bei lokalen Änderungen, einem fehlgesc
 
 Eine nicht erreichbare GitHub-API oder ein Abfragelimit wird als Fehler angezeigt, niemals als „aktuell“. Gibt es keinen öffentlich abrufbaren regulären Release, erscheinen keine Updatebefehle. Ist die installierte Versionsnummer höher, wird kein Downgrade angeboten. Die Funktion bestätigt die Versionsnummer, nicht die Herkunft beliebiger lokaler Codeänderungen.
 
-Für den Herausgeber: Zunächst `webforensics/__init__.py` und den Image-Tag in `compose.yaml` auf die gewünschte Versionsnummer setzen. Anschließend auf GitHub einen dazu passenden Tag auswählen/erstellen und den regulären Release ausdrücklich veröffentlichen. Ein Push auf `main` oder das Erstellen eines Tags allein löst keinen Updatehinweis aus. Für diese Änderung wird kein Release automatisch veröffentlicht.
+Für den Herausgeber: Zunächst `webforensics/__init__.py` und den Image-Tag in `compose.yaml` auf die gewünschte Versionsnummer setzen. Anschließend auf GitHub einen dazu passenden Tag auswählen/erstellen und den regulären Release ausdrücklich veröffentlichen. Ein Push auf `main` oder das Erstellen eines Tags allein löst keinen Updatehinweis aus. Die Anwendung selbst veröffentlicht keine Releases.
 
 ## Module
 
 ### Domainanalyse
 
 - DNS: A, AAAA, NS, MX, TXT, SOA, CAA, jeweils mit TTL und Ergebnisstatus.
-- Domainregistrierung: RDAP anhand des IANA-Verzeichnisses, einschließlich domainbezogener Registry-/Registrar-Verweise, Status und Datumsangaben. Antworten jeder Stufe bleiben erhalten.
+- Domainregistrierung: RDAP anhand des IANA-Verzeichnisses sowie direkt über DENIC für .de; einschließlich Registry-/Registrar-Verweisen, veröffentlichter Kontakte, Status, Datumsangaben und Datenschutz-/Redigierungshinweisen. Antworten jeder Stufe bleiben erhalten.
 - Klassische WHOIS-Kette: IANA → Registry → Registrar → weitere neue WHOIS-Verweise, mit vollständiger Abfragehistorie im Arbeitsspeicher und Rohdaten-Auszügen im Bericht.
 - Netzwerkregistrierung: zuständiges RIR über das IANA-IP-Verzeichnis, bis zu drei öffentliche IPs, Netzbereich und veröffentlichte Betreiberangaben.
 - TLS: geprüfter Hostname und System-Vertrauenskette, Gültigkeit, Aussteller, SAN-Domains, ausgehandeltes TLS/Cipher und SHA-256-Fingerabdruck des Serverzertifikats.
 - HTTPS: HEAD-Anfrage, Status, Weiterleitungsziel und ausgewählte Antwort-/Sicherheitsheader. Weiterleitungen werden **nicht** verfolgt; keine Seiteninhalte oder Skripte geladen.
 
-DNS ist immer aktiv. Die übrigen Bereiche sind einzeln abwählbar. Vor dem Start wird ein Abfrageplan erstellt. Das Ermitteln der RDAP-Dienste kann bereits öffentliche IANA-Verzeichnisse laden; das wird vor dem Plan-Button ausgewiesen. Der Plan zeigt die Domain-Registry und die möglichen RIR-Dienste vor der Zustimmung. Im Report sind die tatsächlich angefragten Quellen dokumentiert. Ein nicht verfügbarer Dienst wird ausdrücklich als nicht verfügbar ausgewiesen und gilt nicht als unauffälliges Ergebnis.
+DNS ist immer aktiv. Die übrigen Bereiche sind einzeln abwählbar. Vor dem Start wird ein Abfrageplan erstellt. Das Ermitteln der RDAP-Dienste kann bereits öffentliche IANA-Verzeichnisse laden; das wird vor dem Plan-Button ausgewiesen. Der Plan zeigt die Domain-Registry, mögliche Registrar-Dienste aus dem IANA-Registrarverzeichnis und die möglichen RIR-Dienste vor der Zustimmung. Zur Planung werden keine Untersuchungsdomains an Registrierungsdienste gesendet. In der Analyse werden domainbezogene RDAP-Verweise innerhalb der bestätigten Abfragekette verfolgt. Fehlt ein RDAP-Link, kann der über seine IANA-ID benannte Registrar anhand des zuvor ausgewiesenen Verzeichnisses ergänzt werden. Das gemeinsame Limit beträgt acht RDAP-Abfragen einschließlich Weiterleitungen. Fällt das Registrarverzeichnis oder der Registrar aus, bleiben Registry-Ergebnisse erhalten. Im Report sind die tatsächlich angefragten Quellen dokumentiert. Ein nicht verfügbarer Dienst wird ausdrücklich als nicht verfügbar ausgewiesen und gilt nicht als unauffälliges Ergebnis.
 
 Externe Abfragen erhalten ein gemeinsames Zeitbudget (40 Sekunden für den Plan, 120 Sekunden für die Domainanalyse, 65 Sekunden für die Headeranalyse), zusätzlich zu den einzelnen DNS-, Verbindungs- und Antwortlimits. Bereits laufende Socketoperationen können noch bis zu ihrem kurzen Einzelzeitlimit auslaufen.
 
@@ -161,17 +161,22 @@ Domain-RDAP folgt zusätzlich HTTP-Weiterleitungen und `related`-Links für dies
 
 **Betrieb:** Ausgehendes TCP 43 zu öffentlichen WHOIS-Diensten muss erlaubt sein. Bei einem Proxy muss HTTP CONNECT zu TCP 43 freigegeben sein. Optional kann `WF_WHOIS_PROXY` einen gesonderten HTTP-CONNECT-Proxy festlegen; sonst wird der vorhandene HTTPS-Proxy genutzt, sofern konfiguriert. Es erfolgt kein direkter Ausweichversuch bei einer Proxy-Ablehnung. Ohne Proxy wird direkt zur vorher geprüften, festgehaltenen öffentlichen IP verbunden. Private Ziele, Anmeldedaten in Referrals, andere Ports und Protokolle werden gesperrt. RWHOIS ist ein anderes Protokoll (typisch TCP 4321) und wird nicht stillschweigend als WHOIS/TCP 43 behandelt; ein solcher Verweis wird als nicht unterstützte, offene Stufe ausgewiesen. Anbieter können WHOIS eingestellt, eingeschränkt oder durch RDAP ersetzt haben; dies wird nicht als unauffälliger bzw. vollständig ermittelter Datensatz dargestellt.
 
+Für **.de** wird `https://rdap.denic.de/` auch ohne Eintrag im IANA-DNS-Bootstrap verwendet. Laut [DENIC](https://www.denic.de/services/whois-service/rdap-service/) liefert dieser Dienst dieselben technischen Daten wie das öffentliche Port-43-WHOIS. Öffentlich verfügbare Inhaberdaten juristischer Personen, etwa Vereinsnamen, veröffentlicht DENIC separat im [Web-WHOIS](https://www.denic.de/services/whois-service/). Diese Inhaberauskunft wird nicht automatisch abgerufen; der Bericht nennt die manuelle Abfragemöglichkeit ausdrücklich. Ein fehlender Inhaberkontakt wird nicht als „redacted for privacy“ ausgegeben, wenn die Quelle dies nicht selbst meldet.
+
+Für **.com** und andere von der IANA erfasste Endungen werden verfügbare Registrar-Daten ergänzend abgefragt. Hinweise aus `notices`, `remarks` und der `redacted`-Erweiterung sowie verschachtelte Kontaktrollen und vCards werden im Bericht und PDF ausgewiesen. Angaben wie „REDACTED FOR PRIVACY“ werden als gelieferte Werte übernommen; sie werden nicht durch leere Felder ersetzt oder aus fehlenden Angaben erfunden.
+
 ### E-Mail-Header-Analyse
 
 - Absenderfelder und Unterschiede zwischen From, Reply-To und Return-Path.
-- Received-Stationen in behaupteter zeitlicher Reihenfolge, UTC-Zeitstempel und Zeitwidersprüche.
-- Vorhandene Authentication-Results, ARC-Authentication-Results, Received-SPF und DKIM-Signature.
-- IP-Adressen aus Received und X-Originating-IP, doppelte oder fehlende wichtige Felder und Parserfehler.
+- Received-Stationen in Versandrichtung mit sendendem und empfangendem System, UTC-Zeitstempeln und Zeitwidersprüchen.
+- Verständliche SPF-/DKIM-/DMARC-Ergebnisse mit prüfendem System, geprüfter Domain und Bedeutung für Versandberechtigung bzw. mögliche Absenderfälschung. Fehlende Ergebnisse, negative Ergebnisse und technische Prüffehler werden unterschieden. Ergebnisse mehrerer Prüfsysteme bleiben getrennt; ARC-Ergebnisse früherer Stationen und vorhandene DKIM-Signaturen werden zusätzlich ausgewiesen.
+- Verzeichnis der erfassten IP-Adressen mit Fundstellen, öffentlichem/internem Adresstyp und erkennbarer Transportrolle: möglicher Endpunkt bei authentifizierter Einlieferung, einlieferndes System, Zwischenstation oder Empfangsserver. Einbezogen werden Received, X-Originating-IP sowie ausdrücklich genannte Verbindungs-IPs aus Authentication-Results und Received-SPF (höchstens 30 verschiedene Adressen).
+- Doppelte oder fehlende wichtige Felder und Parserfehler.
 - Originaleingabe und deren SHA-256-Prüfsumme im Bericht.
 
 Standardmäßig vollständig ohne externe Abfragen. Optional können maximal drei öffentliche Header-IP-Adressen mit Netzwerk-RDAP ergänzt werden; dafür ist ein bestätigter Abfrageplan erforderlich. Der vollständige Header wird nicht an diese Dienste gesendet. Nur Header einfügen, keine Nachrichtentexte oder Anhänge. Eingaben mit Nachrichtentext werden abgewiesen. Maximal 64 KiB UTF-8-Eingabe und 1500 Zeilen.
 
-Eingetragene SPF-/DKIM-/DMARC-Ergebnisse sind **unverifizierte Behauptungen des Headers**. Die Anwendung kennt keine vertrauenswürdige Empfangsgrenze und bestätigt diese Ergebnisse nicht. Eine vollständige DKIM-Prüfung benötigt auch den Nachrichteninhalt. Received-Felder belegen keinen tatsächlichen Urheber oder Standort.
+Grundlage sind die im übermittelten Header protokollierten Angaben. Der Bericht erläutert sie und nennt konkrete Fundstellen; er führt keine neuen SPF-/DKIM-/DMARC-Prüfungen aus. Ein erfolgreicher SPF-Test bezieht sich auf die technische MAIL-FROM- bzw. HELO-Domain; für die Zuordnung zur sichtbaren From-Domain ist das DMARC-Ergebnis entscheidend. Ein fehlender Test ist kein Beleg für Spoofing. Ein zugelassener Versandweg kann auch durch einen Versanddienst oder ein kompromittiertes Konto genutzt werden; für einen konkreten Kontozugriff und die handelnde Person sind ergänzende Anmelde-/Serverprotokolle nötig. IP-Rollen werden aus den Headerpositionen und dem protokollierten Übertragungsverfahren abgeleitet, nicht aus geratenen Gerätearten oder DNS-Abfragen.
 
 ## Datenfluss und Grenzen der flüchtigen Verarbeitung
 
@@ -193,13 +198,14 @@ Anwendung und Gunicorn schreiben keine Zugriffs-, Fehler- oder Analyseprotokolle
 | --- | --- | --- |
 | DNS | Resolver aus Container-/Hostkonfiguration; rekursive Weitergabe möglich | Domain-/Dienstnamen, Recordtyp |
 | Anbieterlisten | `data.iana.org/rdap/dns.json`, `ipv4.json`, `ipv6.json` | Keine Untersuchungsdaten; statische Verzeichnisabfrage |
-| Domain-RDAP | Zuständige Registry und deren domainbezogene Registrar-RDAP-Verweise über HTTPS | Registrierbare Basisdomain |
+| Registrarverzeichnis | `www.iana.org/assignments/registrar-ids/registrar-ids-1.csv` | Keine Untersuchungsdaten; statische Verzeichnisabfrage |
+| Domain-RDAP | Zuständige Registry (für .de direkt `rdap.denic.de`) und deren domainbezogene Registrar-RDAP-Verweise über HTTPS; bei fehlendem Link Registrar aus dem IANA-Verzeichnis | Registrierbare Basisdomain |
 | Klassische WHOIS-Kette | `whois.iana.org` und die daraufhin benannten öffentlichen WHOIS-Server, TCP 43 | Registrierbare Domain, gegebenenfalls TLD und feste VeriSign-Abfragepräfixe; unverschlüsselt |
 | Netzwerk-RDAP | Zuständiges RIR laut Abfrageplan, z. B. ARIN/RIPE/APNIC/LACNIC/AFRINIC | Einzelne öffentliche IP-Adresse |
 | TLS/HTTPS | Öffentliche IP der Zieldomain, Port 443 | SNI/Host, Standard-User-Agent und HEAD-Anfrage an `/` |
 | Manuelle Release-Prüfung | `api.github.com` | Statische Abfrage des aktuellen öffentlichen Releases, ohne Untersuchungsdaten oder installierte Versionsnummer |
 
-Alle externen Verbindungen offenbaren auch die Absender-IP der Installation bzw. des konfigurierten Proxys. Aktenzeichen und vollständige Header gehen nicht an diese Dienste. Eigene DNS-Resolver können über `WF_DNS_RESOLVERS` als kommagetrennte IPs festgelegt werden (in Compose bei Bedarf zusätzlich eintragen). Ausgehende DNS-Verbindungen und HTTPS müssen beim jeweiligen Betreiber erlaubt sein.
+Alle externen Verbindungen offenbaren auch die Absender-IP der Installation bzw. des konfigurierten Proxys. Aktenzeichen und vollständige Header gehen nicht an diese Dienste. Eigene DNS-Resolver können über `WF_DNS_RESOLVERS` als kommagetrennte IPs festgelegt werden (in Compose bei Bedarf zusätzlich eintragen). Ausgehende DNS-Verbindungen und HTTPS müssen beim jeweiligen Betreiber erlaubt sein. Für Domainregistrierungen insbesondere `data.iana.org`, `www.iana.org`, die zuständige Registry (bei .de `rdap.denic.de`) und gegebenenfalls der im Plan ausgewiesene Registrar. Eine gesperrte Verbindung wird im jeweiligen Abschnitt als nicht verfügbar ausgewiesen.
 
 HTTPS respektiert konfigurierte `HTTPS_PROXY`-/`NO_PROXY`-Einstellungen und `SSL_CERT_FILE`. Für TLS-Proxys muss ein passendes, vertrauenswürdiges CA-Bundle schreibgeschützt eingebunden werden. Verifikation wird nicht abgeschaltet. HTTP-CONNECT-Proxys müssen Tunnel zu geprüften öffentlichen **IP-Adressen** erlauben; SNI und Zertifikatsprüfung verwenden weiter den ursprünglichen Hostnamen. Hostnamen-basierte Egress-Allowlists können dies einschränken. Die Anwendung wechselt in diesem Fall nicht auf einen unsicheren Verbindungspfad.
 

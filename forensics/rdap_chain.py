@@ -32,7 +32,7 @@ def domain_url(value, domain):
         raise NetworkError("RDAP-Verweis ist keine reine HTTPS-Domainabfrage auf Port 443 für dieselbe Registrierungsdomain.") from None
 
 
-def walk_domain_rdap(url, domain, allowed_hosts, fetch, max_requests=8):
+def walk_domain_rdap(url, domain, allowed_hosts, fetch, max_requests=8, registrar_lookup=None):
     domain = normalize_domain(domain)
     steps, problems, skipped = [], [], []
     queue = [(url, "")]
@@ -81,6 +81,10 @@ def walk_domain_rdap(url, domain, allowed_hosts, fetch, max_requests=8):
                         if not isinstance(href, str):
                             raise NetworkError("RDAP-Weiterverweis ohne gültige Adresse.")
                         targets.append(urljoin(current, href))
+                if not targets and registrar_lookup:
+                    registrar = registrar_lookup(data)
+                    if registrar and registrar != current:
+                        targets.append(registrar)
             else:
                 raise NetworkError(f"RDAP-Dienst antwortet mit HTTP {status}; frühere Ergebnisse bleiben erhalten.")
             for target in targets:

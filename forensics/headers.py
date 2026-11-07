@@ -1,4 +1,3 @@
-import ipaddress
 import re
 from datetime import timezone
 from email import policy
@@ -6,6 +5,8 @@ from email.parser import HeaderParser
 from email.utils import getaddresses, parsedate_to_datetime
 
 from .report import finish, new_report, section
+from .mailauth import add_authentication
+from .mailroute import describe_hop, extract_ips, ip_inventory, received_parts
 
 MAX_HEADER_BYTES = 64 * 1024
 
@@ -29,20 +30,6 @@ def parse_time(value):
         return None
 
 
-def extract_ips(values):
-    addresses = []
-    for value in values:
-        # Parse candidates, never interpret arbitrary header strings as lookup URLs.
-        for candidate in re.findall(r"(?:IPv6:)?[0-9A-Fa-f:.]+", str(value)):
-            try:
-                address = ipaddress.ip_address(candidate.removeprefix("IPv6:").strip("."))
-            except ValueError:
-                continue
-            if str(address) not in addresses:
-                addresses.append(str(address))
-    return addresses[:30]
-
-
 def analyze_header(case, original, enrich=False, plan=None):
     if not isinstance(original, str) or not original.strip():
         raise ValueError("Bitte einen vollständigen E-Mail-Header einfügen.")
@@ -62,12 +49,10 @@ def analyze_header(case, original, enrich=False, plan=None):
         raise ValueError("Es wurden keine gültigen Headerfelder erkannt.")
 
     report = new_report("headers", case, "E-Mail-Header", original)
-    report["sources"].append("Vom Benutzer übermittelter Header; Herkunft und Vollständigkeit nicht verifiziert.")
+    report["sources"].append("Vom Benutzer übermittelter E-Mail-Header.")
     report["limitations"] += [
-        "Alle Headerfelder einschließlich Received und Authentication-Results können manipuliert sein. Eine vertrauenswürdige Empfangsgrenze ist nicht bekannt.",
-        "SPF-, DKIM- und DMARC-Ergebnisse werden ausschließlich aus dem Header ausgelesen, nicht unabhängig bestätigt. DKIM benötigt zur vollständigen Prüfung auch den Nachrichteninhalt.",
-        "Received-Reihenfolge und Zeitdifferenzen beruhen auf den eingetragenen Angaben. Sie belegen weder den tatsächlichen Absender noch dessen Standort.",
-        "Die Prüfsumme bezieht sich auf die eingefügte UTF-8-Eingabe; Einfügen und Kopieren können die Originaldarstellung verändern.",
+        "Grundlage ist der übermittelte E-Mail-Header. Ausgewertet werden die darin protokollierten Transportstationen und Prüfergebnisse der Mailsysteme.",
+        "Ein zugelassener Versandweg kann auch über einen beauftragten Versanddienst oder ein kompromittiertes Konto genutzt werden. Ob ein unberechtigter Kontozugriff vorlag und welche Person die Nachricht veranlasst hat, lässt sich erst mit ergänzenden Anmelde- und Serverprotokollen klären.",
     ]
     rows = [[label, clean(msg.get(field, "Nicht angegeben"))] for field, label in [
         ("From", "From / sichtbarer Absender"), ("Reply-To", "Antwortadresse"),
@@ -103,26 +88,22 @@ def analyze_header(case, original, enrich=False, plan=None):
                 report["summary"].append({"level": "warning", "text": f"Zeitwiderspruch vor Received-Station {number}: {seconds} Sekunden. Abweichende Serveruhren oder manipulierte Angaben sind mögliche Ursachen."})
             elif seconds > 3600:
                 report["summary"].append({"level": "notice", "text": f"Zwischen Received-Station {number - 1} und {number} liegen laut Header mehr als 60 Minuten."})
-        route.append([f"Station {number}", f"UTC: {timestamp.isoformat() if timestamp else 'nicht eindeutig bestimmbar'} | Abstand: {delta}\n{clean(hop)}"])
+        route.append([f"Station {number}", describe_hop(received_parts(hop)) + f"\nUTC: {timestamp.isoformat() if timestamp else 'nicht eindeutig bestimmbar'} | Abstand zur vorherigen Station: {delta}"])
         previous = timestamp
     section(report, "Transportweg laut Received", route, status="ok" if route else "unavailable",
-            note="Von unten nach oben gelesen (behauptete früheste Station zuerst). Keine Station ist automatisch vertrauenswürdig.",
+            note="In Versandrichtung dargestellt: früheste eingetragene Station zuerst, zuletzt der letzte dokumentierte Empfang. Eine Station beschreibt jeweils die Übergabe zwischen zwei Systemen.",
             source="Received-Felder, Reihenfolge und Zeitangaben aus der Eingabe")
     report["summary"].append({"level": "info", "text": f"{len(received)} Received-Stationen im Header erkannt."})
 
-    auth_rows = []
-    for name in ("Authentication-Results", "ARC-Authentication-Results", "Received-SPF"):
-        for index, value in enumerate(msg.get_all(name, []), 1):
-            auth_rows.append([f"{name} #{index} (nicht verifiziert)", clean(value)])
-    for index, signature in enumerate(msg.get_all("DKIM-Signature", []), 1):
-        tags = dict(re.findall(r"(?:^|;)\s*([a-z]+)\s*=\s*([^;]+)", str(signature)))
-        auth_rows.append([f"DKIM-Signature #{index}", f"Domain: {clean(tags.get('d', 'fehlt'))}; Selektor: {clean(tags.get('s', 'fehlt'))}; Algorithmus: {clean(tags.get('a', 'fehlt'))}. Signatur vorhanden, nicht geprüft."])
-    section(report, "Authentifizierung laut Header", auth_rows, status="ok" if auth_rows else "unavailable",
-            note="Keine eigenständige SPF-/DKIM-/DMARC-Prüfung. Auch eingetragene pass-Ergebnisse können gefälscht sein.", source="Authentication-Results, ARC, Received-SPF und DKIM-Signature")
-
-    ips = extract_ips(received + msg.get_all("X-Originating-IP", []))
-    section(report, "IP-Adressen im Transportheader", [[ip, "Öffentlich routbar" if ipaddress.ip_address(ip).is_global else "Nicht öffentlich routbar; keine externe Abfrage"] for ip in ips],
-            note="Erwähnte Adressen, keine bestätigte Ursprungszuordnung.", source="Received und X-Originating-IP")
+    auth_summary, auth_records = add_authentication(report, msg, sender_domain=sender)
+    ip_rows, ips, last_incoming = ip_inventory(msg, received, auth_records)
+    section(report, "Erfasste IP-Adressen und ihre Rolle", ip_rows, status="ok" if ips else "empty",
+            note="Jede Adresse wird mit ihrer Fundstelle und der dort erkennbaren Rolle aufgeführt (höchstens 30 verschiedene Adressen). Eine Endpunkt-IP kann zu einem Anschluss, einem VPN, einem Proxy oder einem Server gehören; der Header unterscheidet diese Möglichkeiten nicht sicher.",
+            source="Received, X-Originating-IP und IP-Angaben in Authentication-Results / Received-SPF")
+    ip_summary = [{"level": "info", "text": f"{len(ips)} unterschiedliche IP-Adresse(n) erfasst; Rollen und Fundstellen sind im IP-Verzeichnis erläutert."}]
+    if last_incoming:
+        ip_summary.append({"level": "info", "text": "Einliefernde IP-Adresse(n) beim letzten dokumentierten Empfang: " + ", ".join(dict.fromkeys(last_incoming)) + "."})
+    report["summary"] = auth_summary + ip_summary + report["summary"]
     if enrich:
         from .domain import add_networks
         from .network import is_public

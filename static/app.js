@@ -110,7 +110,14 @@
     panel.replaceChildren(element("h3", "", "Vorgesehene externe Abfragen"), element("p", "plan-intro", "Bitte die Empfänger und übermittelten Daten prüfen. Aktenzeichen und vollständige Header werden nicht an diese Dienste gesendet."));
     for (const [purpose, recipient, transmitted] of data.plan.recipients) {
       const node = element("div", "plan-recipient");
-      node.append(element("strong", "", purpose), element("div", "recipient-host", recipient), element("p", "", transmitted));
+      node.append(element("strong", "", purpose));
+      const hosts = element("div", "recipient-host", recipient);
+      if (recipient.split(", ").length > 8) {
+        const providers = element("details");
+        providers.append(element("summary", "", `Mögliche Anbieter anzeigen (${recipient.split(", ").length})`), hosts);
+        node.append(providers);
+      } else node.append(hosts);
+      node.append(element("p", "", transmitted));
       panel.append(node);
     }
     for (const message of data.plan.errors) panel.append(element("p", "plan-error", message + " Dieser Prüfbereich wird gegebenenfalls als nicht verfügbar ausgewiesen."));
@@ -213,7 +220,7 @@
       const marker = ++generation;
       controller = new AbortController();
       const signal = controller.signal;
-      const status = element("p", "field-help run-status", isPlanRequest ? "Abfrageziele werden ermittelt …" : "Analyse läuft. Netzwerkabfragen können bis zu etwa zwei Minuten dauern …");
+      const status = element("p", "field-help run-status", isPlanRequest ? "Registrierungsdienste werden ermittelt …" : "Analyse läuft. Netzwerkabfragen können bis zu etwa zwei Minuten dauern …");
       status.setAttribute("role", "status");
       $(".form-actions", form).before(status);
       buttonLabel(button, isPlanRequest ? "Abfrageplan wird erstellt …" : "Analyse läuft …");

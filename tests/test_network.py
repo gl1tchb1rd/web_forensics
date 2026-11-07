@@ -65,7 +65,7 @@ class NetworkTests(SimpleTestCase):
             request.assert_called_once()
 
     def test_plan_reveals_provider_and_does_not_send_domain(self):
-        with patch("forensics.domain.bootstrap", return_value=[[["org"], ["https://rdap.example/"]]]), patch("forensics.domain.resolver_description", return_value="10.0.0.53"):
+        with patch("forensics.domain.bootstrap", return_value=[[["org"], ["https://rdap.example/"]]]), patch("forensics.domain.registrar_directory", return_value={"1": "https://registrar.example/"}), patch("forensics.domain.resolver_description", return_value="10.0.0.53"):
             plan = make_plan("domain", "example.org", {"rdap": True})
         self.assertEqual(plan["provider"], "https://rdap.example/")
         self.assertEqual(plan["recipients"][1][1], "rdap.example")

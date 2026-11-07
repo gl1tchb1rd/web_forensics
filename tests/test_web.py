@@ -74,6 +74,21 @@ class WebTests(SimpleTestCase):
         links = [annotation.get_object().get("/A", {}).get("/URI") for page in reader.pages for annotation in page.get("/Annots", [])]
         self.assertIn(url, links)
 
+    def test_header_pdf_explains_authorization_and_ip_roles_without_repeated_caveats(self):
+        header = """Received: from mail.sender.example [198.51.100.8] by inbox.recipient.example [203.0.113.9] with ESMTPS; Fri, 06 Nov 2026 12:01:00 +0000
+Received: from laptop [192.168.1.5] by mail.sender.example [198.51.100.8] with ESMTPSA; Fri, 06 Nov 2026 12:00:00 +0000
+Authentication-Results: inbox.recipient.example; spf=pass smtp.mailfrom=sender.example; dkim=pass header.d=sender.example; dmarc=pass header.from=sender.example
+From: sender@sender.example
+To: recipient@recipient.example
+"""
+        report = analyze_header("AZ", header)
+        text = "\n".join(page.extract_text() for page in PdfReader(io.BytesIO(render_pdf(report))).pages)
+        text = " ".join(text.split())
+        for phrase in ("Bestanden (pass)", "zum Versand zugelassen", "Absender-Endpunkt", "Empfangsserver", "Received-Station 1", "192.168.1.5", "Anmelde- und Serverprotokollen", "Grundlage und Einordnung"):
+            self.assertIn(phrase, text)
+        for phrase in ("nicht verifiziert", "Keine eigenständige SPF", "können gefälscht sein"):
+            self.assertNotIn(phrase, text)
+
     def test_external_queries_require_consent_and_valid_plan(self):
         with patch("webforensics.views.analyze_domain") as domain:
             response = self.post("/api/analyze", {"module": "domain", "case": "AZ", "input": "example.org"})

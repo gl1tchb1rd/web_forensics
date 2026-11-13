@@ -6,11 +6,13 @@ from webforensics import __version__
 
 
 def validate_case(value):
+    if value is None:
+        return ""
     if not isinstance(value, str):
-        raise ValueError("Bitte ein Aktenzeichen angeben.")
+        raise ValueError("Das Aktenzeichen muss ein Text sein.")
     value = value.strip()
-    if not value or len(value) > 100 or any(ord(c) < 32 or ord(c) == 127 for c in value):
-        raise ValueError("Das Aktenzeichen muss 1–100 Zeichen ohne Steuerzeichen enthalten.")
+    if len(value) > 100 or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError("Das Aktenzeichen darf höchstens 100 Zeichen ohne Steuerzeichen enthalten.")
     return value
 
 
@@ -38,6 +40,7 @@ def finish(report):
 
 
 def filename(report):
-    safe_case = re.sub(r"[^A-Za-z0-9._-]+", "_", report["case"]).strip("._")[:80] or "Aktenzeichen"
+    safe_case = re.sub(r"[^A-Za-z0-9._-]+", "_", report["case"]).strip("._")[:80]
+    prefix = (safe_case or "Aktenzeichen") + "_" if report["case"] else ""
     module = "Domainanalyse" if report["module"] == "domain" else "Headeranalyse"
-    return f"{safe_case}_{module}_{report['started_at'][:10]}_{report['id'][:8]}.pdf"
+    return f"{prefix}{module}_{report['started_at'][:10]}_{report['id'][:8]}.pdf"

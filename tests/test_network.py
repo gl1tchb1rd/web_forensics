@@ -1,4 +1,6 @@
 import socket
+from email.message import Message
+from http.cookiejar import CookieJar
 from unittest.mock import MagicMock, patch
 from django.test import SimpleTestCase
 from forensics.network import NetworkError, fetch_https, is_public, network_budget, normalize_domain, open_tls, resolve_public
@@ -57,6 +59,29 @@ class NetworkTests(SimpleTestCase):
         for url in ("http://example.org", "https://user:pass@example.org", "https://example.org:22", "https://example.org/\r\nX:bad"):
             with self.subTest(url=url), self.assertRaises(NetworkError):
                 fetch_https(url)
+
+    def test_lookup_cookie_session_follows_service_scope_without_global_state(self):
+        cookies = CookieJar()
+        headers = Message()
+        headers["Set-Cookie"] = "lookup=session-example; Path=/; Secure; HttpOnly"
+        response = MagicMock()
+        response.status = 200
+        response.info.return_value = headers
+        response.getheaders.return_value = list(headers.items())
+        response.read1.return_value = b""
+        with patch("forensics.network.open_tls"), patch("forensics.network.http.client.HTTPConnection") as connection:
+            connection.return_value.getresponse.return_value = response
+            fetch_https("https://webwhois.denic.de/?query=example.de", cookie_jar=cookies)
+            del headers["Set-Cookie"]
+            response.getheaders.return_value = []
+            fetch_https("https://webwhois.denic.de/result", cookie_jar=cookies)
+            fetch_https("https://other.example/", cookie_jar=cookies)
+            fetch_https("https://webwhois.denic.de/result")
+        requests = connection.return_value.request.call_args_list
+        self.assertNotIn("Cookie", requests[0].kwargs["headers"])
+        self.assertEqual(requests[1].kwargs["headers"]["Cookie"], "lookup=session-example")
+        self.assertNotIn("Cookie", requests[2].kwargs["headers"])
+        self.assertNotIn("Cookie", requests[3].kwargs["headers"])
 
     def test_rdap_redirect_to_undisclosed_host_is_blocked(self):
         with patch("forensics.domain.fetch_https", return_value=(302, {"Location": "https://unknown.example/ip/1.1.1.1"}, b"")) as request:

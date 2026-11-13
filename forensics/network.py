@@ -10,7 +10,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from urllib.parse import urlsplit
-from urllib.request import getproxies, proxy_bypass
+from urllib.request import Request, getproxies, proxy_bypass
 
 import dns.exception
 import dns.resolver
@@ -140,13 +140,21 @@ def _socket(host, ip, timeout, port=443, proxy_url=None):
 def open_whois(host):
     remaining(5)
     addresses = resolve_public(host)
-    try:
-        return _socket(host, addresses[0], remaining(5), port=43,
-                       proxy_url=os.environ.get("WF_WHOIS_PROXY"))
-    except (OSError, http.client.HTTPException):
-        raise NetworkError("WHOIS-Verbindung auf TCP-Port 43 fehlgeschlagen, vom Proxy abgewiesen oder Zeitlimit erreicht.") from None
-    except ValueError:
-        raise NetworkError("Die WHOIS-Proxykonfiguration ist ungültig.") from None
+    deadline = time.monotonic() + remaining(7)
+    for address in addresses:
+        timeout = min(deadline - time.monotonic(), remaining(5))
+        if timeout <= 0:
+            break
+        try:
+            return _socket(host, address, timeout, port=43,
+                           proxy_url=os.environ.get("WF_WHOIS_PROXY"))
+        except http.client.HTTPException:
+            raise NetworkError("Der Proxy hat die WHOIS-Verbindung abgewiesen. Er muss HTTP CONNECT zu TCP 43 erlauben; gegebenenfalls WF_WHOIS_PROXY prüfen.") from None
+        except OSError:
+            continue
+        except ValueError:
+            raise NetworkError("Die WHOIS-Proxykonfiguration ist ungültig.") from None
+    raise NetworkError("WHOIS-Verbindung auf TCP-Port 43 über die geprüften öffentlichen Zieladressen fehlgeschlagen oder Zeitlimit erreicht.")
 
 
 def open_tls(host, addresses=None, timeout=5):
@@ -169,7 +177,7 @@ def open_tls(host, addresses=None, timeout=5):
         raise NetworkError("HTTPS/TLS-Verbindung fehlgeschlagen, vom Proxy abgewiesen oder Zeitlimit erreicht.") from None
 
 
-def fetch_https(url, method="GET", addresses=None, limit=1024 * 1024):
+def fetch_https(url, method="GET", addresses=None, limit=1024 * 1024, accept="application/rdap+json, application/json, */*", cookie_jar=None):
     parsed = urlsplit(url)
     try:
         valid = parsed.scheme == "https" and parsed.hostname and parsed.port in (None, 443) and not parsed.username and not parsed.password and not parsed.fragment
@@ -182,11 +190,20 @@ def fetch_https(url, method="GET", addresses=None, limit=1024 * 1024):
     started = time.monotonic()
     try:
         connection.sock = open_tls(parsed.hostname, addresses)
-        connection.request(method, parsed.path + ("?" + parsed.query if parsed.query else ""), headers={
-            "Host": parsed.hostname, "User-Agent": f"WebForensics/{__version__}", "Accept": "application/rdap+json, application/json, */*",
+        request_headers = {
+            "Host": parsed.hostname, "User-Agent": f"WebForensics/{__version__}", "Accept": accept,
             "Accept-Encoding": "identity", "Connection": "close",
-        })
+        }
+        cookie_request = Request(url)
+        if cookie_jar is not None:
+            cookie_jar.add_cookie_header(cookie_request)
+            cookie = cookie_request.get_header("Cookie")
+            if cookie:
+                request_headers["Cookie"] = cookie
+        connection.request(method, parsed.path + ("?" + parsed.query if parsed.query else ""), headers=request_headers)
         response = connection.getresponse()
+        if cookie_jar is not None:
+            cookie_jar.extract_cookies(response, cookie_request)
         body = bytearray()
         if method != "HEAD":
             while True:

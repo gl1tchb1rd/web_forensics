@@ -1,6 +1,6 @@
 # Web Forensics
 
-Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein verpflichtendes Aktenzeichen in jedem Modul. Programmversion: **0.4.0**. Änderungen: [Versionshinweise](CHANGELOG.md).
+Selbst gehostete Webanwendung von **gl1tchb1rd** für Domain- und E-Mail-Header-Analysen. Dunkle Oberfläche, sachliche A4-PDF-Berichte und ein optionales Aktenzeichen in jedem Modul. Ohne Aktenzeichen entfallen die entsprechende Berichtsangabe und der Dateinamen-Präfix. Programmversion: **0.4.0**. Änderungen: [Versionshinweise](CHANGELOG.md).
 
 Keine Datenbank, Benutzerkonten, Berichtablage, KI-Anbindung oder Telemetrie. Alle Browserressourcen werden lokal ausgeliefert. Optionaler gemeinsamer Passwortschutz ist direkt integriert; TLS und weitere Zugangsregeln konfiguriert der Betreiber beispielsweise an seinem Reverse-Proxy.
 

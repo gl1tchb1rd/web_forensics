@@ -148,6 +148,7 @@
     meta.replaceChildren();
     const date = new Date(report.started_at).toLocaleString("de-DE", {timeZone: "UTC", dateStyle: "medium", timeStyle: "medium"}) + " UTC";
     for (const [label, value] of [["AKTENZEICHEN", report.case], ["ABFRAGEZEITPUNKT", date], ["ANALYSE-ID", report.id]]) {
+      if (label === "AKTENZEICHEN" && !value) continue;
       const cell = element("div", "meta-cell");
       cell.append(element("small", "", label), element("strong", "", value));
       meta.append(cell);

@@ -2,6 +2,8 @@
 
 ## Noch nicht veröffentlicht – 13. November 2026
 
+- Aktenzeichen in beiden Modulen optional; Auswertung, Bericht und PDF-Download funktionieren auch ohne diese Angabe.
+
 - Öffentliche DENIC-Web-WHOIS-Abfrage aus dem bereitgestellten Domainanalysator übernommen: öffentliche Inhaber-/Vereinsangaben, verwaltendes Mitglied und Datumsangaben statt eines bloßen manuellen Verweises.
 - WHOIS-Inhaber-, Organisations- und Kontaktfelder einschließlich Privacy-Platzhaltern werden strukturiert angezeigt und bei langen Nameserverlisten priorisiert.
 - Bei Verbindungsfehlern werden weitere geprüfte öffentliche WHOIS-IP-Adressen versucht. Proxy-Ablehnungen werden konkret ausgewiesen, ohne direkten Ausweichversuch.

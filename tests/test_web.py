@@ -25,10 +25,34 @@ class WebTests(SimpleTestCase):
         self.assertEqual(page.headers["Cache-Control"], "no-store, max-age=0")
         self.assertIn("default-src 'self'", page.headers["Content-Security-Policy"])
 
-    def test_case_is_required_server_side(self):
-        response = self.post("/api/analyze", {"module": "headers", "input": HEADER})
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Aktenzeichen", response.json()["error"])
+    def test_optional_case_allows_header_analysis_and_pdf(self):
+        for supplied in ({}, {"case": ""}, {"case": "   "}, {"case": None}):
+            with self.subTest(supplied=supplied):
+                result = self.post("/api/analyze", {"module": "headers", "input": HEADER, **supplied})
+                self.assertEqual(result.status_code, 200)
+                self.assertEqual(result.json()["report"]["case"], "")
+                self.assertTrue(result.json()["filename"].startswith("Headeranalyse_"))
+                pdf = self.post("/api/report.pdf", {"token": result.json()["token"]})
+                self.assertEqual(pdf.status_code, 200)
+                text = "\n".join(page.extract_text() for page in PdfReader(io.BytesIO(pdf.content)).pages)
+                self.assertNotIn("Aktenzeichen:", text)
+                self.assertIn("Analyse-ID:", text)
+
+    def test_optional_case_allows_domain_analysis_and_pdf(self):
+        plan = self.post("/api/plan", {"module": "domain", "domain": "example.org", "options": {}})
+        with patch("forensics.domain.dns_record", side_effect=lambda domain, kind: {"kind": kind, "values": [], "status": "empty", "note": ""}):
+            result = self.post("/api/analyze", {"module": "domain", "input": "example.org", "consent": True, "plan_token": plan.json()["token"]})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()["report"]["case"], "")
+        self.assertTrue(result.json()["filename"].startswith("Domainanalyse_"))
+        self.assertEqual(self.post("/api/report.pdf", {"token": result.json()["token"]}).status_code, 200)
+
+    def test_supplied_case_still_rejects_invalid_values(self):
+        for value in (123, False, [], {}, "x" * 101, "a\x00b"):
+            with self.subTest(value=value):
+                result = self.post("/api/analyze", {"module": "headers", "input": HEADER, "case": value})
+                self.assertEqual(result.status_code, 400)
+                self.assertIn("Aktenzeichen", result.json()["error"])
 
     def test_roundtrip_header_to_pdf_and_no_report_files(self):
         with tempfile.TemporaryDirectory() as tmp, patch("tempfile.tempdir", tmp):

@@ -50,10 +50,11 @@ def render_pdf(report):
         canvas.saveState()
         canvas.setFont("WF-Bold", 8)
         canvas.drawString(22 * mm, 285 * mm, "WEB FORENSICS · TECHNISCHER BERICHT")
-        case_style = ParagraphStyle("CaseHeader", fontName="WF", fontSize=7, leading=9, wordWrap="CJK")
-        label = Paragraph("Aktenzeichen: " + safe(report["case"]), case_style)
-        _, height = label.wrap(166 * mm, 15 * mm)
-        label.drawOn(canvas, 22 * mm, 278 * mm - height)
+        if report["case"]:
+            case_style = ParagraphStyle("CaseHeader", fontName="WF", fontSize=7, leading=9, wordWrap="CJK")
+            label = Paragraph("Aktenzeichen: " + safe(report["case"]), case_style)
+            _, height = label.wrap(166 * mm, 15 * mm)
+            label.drawOn(canvas, 22 * mm, 278 * mm - height)
         canvas.setStrokeColor(colors.HexColor("#cccccc"))
         canvas.line(22 * mm, 268 * mm, 188 * mm, 268 * mm)
         canvas.line(22 * mm, 19 * mm, 188 * mm, 19 * mm)
@@ -67,6 +68,8 @@ def render_pdf(report):
     for label, value in (("Aktenzeichen", report["case"]), ("Untersuchungsgegenstand", report["target"]), ("Analyse-ID", report["id"]),
                          ("Beginn (UTC)", report["started_at"]), ("Abschluss (UTC)", report["finished_at"]), ("Software", "Web Forensics " + report["version"]),
                          ("SHA-256 der Eingabe", report["input_sha256"])):
+        if label == "Aktenzeichen" and not value:
+            continue
         story.append(Paragraph(f"<b>{safe(label)}:</b> {safe(value)}", styles["BodyWF"]))
     story.append(Paragraph(f'<b>Programm-Repository:</b> <link href="{REPOSITORY_URL}" color="#222222">{REPOSITORY_URL}</link>', styles["SmallWF"]))
     story += [p(report["hash_note"], "SmallWF"), HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#bbbbbb"))]

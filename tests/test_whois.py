@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import socket
 from unittest.mock import MagicMock, patch
 
@@ -135,6 +136,41 @@ class WhoisProtocolTests(SimpleTestCase):
         self.assertIn(["Registrierungsdatum (laut WHOIS)", "2000-01-02"], rows)
         self.assertEqual(len(rows), 3)
 
+    def test_registrant_privacy_and_contact_data_are_not_hidden_from_report(self):
+        text = "Domain Name: EXAMPLE.COM\nRegistrant Name: REDACTED FOR PRIVACY\nRegistrant Organization: Example association\nRegistrant Street: Musterweg 1\nRegistrant Email: contact@example.com\nTech Name: Example administrator\nRegistrar Abuse Contact Email: abuse@example.org\n"
+        rows = whois_fields(text)
+        self.assertIn(["Domaininhaber / Name (laut WHOIS)", "REDACTED FOR PRIVACY"], rows)
+        self.assertIn(["Domaininhaber / Organisation (laut WHOIS)", "Example association"], rows)
+        self.assertIn(["Domaininhaber / E-Mail (laut WHOIS)", "contact@example.com"], rows)
+        self.assertIn(["Technischer Kontakt / Name (laut WHOIS)", "Example administrator"], rows)
+        self.assertIn(["Registrar / Missbrauchskontakt / E-Mail (laut WHOIS)", "abuse@example.org"], rows)
+
+    def test_long_nameserver_list_does_not_discard_later_holder_name(self):
+        text = "\n".join(f"Name Server: ns{index}.example.org" for index in range(120)) + "\nRegistrant Name: REDACTED FOR PRIVACY\n"
+        rows = whois_fields(text)
+        self.assertIn(["Domaininhaber / Name (laut WHOIS)", "REDACTED FOR PRIVACY"], rows)
+        self.assertEqual(len(rows), 96)
+
+    def test_socket_chain_carries_registrant_value_into_report(self):
+        report = new_report("domain", "TEST", "example.com", "example.com")
+        replies = {"whois.iana.org": b"whois: whois.registry.example\r\n",
+                   "whois.registry.example": b"Domain Name: EXAMPLE.COM\r\nRegistrar WHOIS Server: whois.registrar.example\r\n",
+                   "whois.registrar.example": b"Domain Name: EXAMPLE.COM\r\nRegistrant Name: REDACTED FOR PRIVACY\r\n"}
+        sockets = []
+        def open_socket(host):
+            sock = MagicMock()
+            sock.recv.side_effect = [replies[host], b""]
+            connection = MagicMock()
+            connection.__enter__.return_value = sock
+            sockets.append(sock)
+            return connection
+        with patch("forensics.whois.open_whois", side_effect=open_socket):
+            add_whois(report, "example.com")
+        self.assertEqual(len(sockets), 3)
+        self.assertIn(["Domaininhaber / Name (laut WHOIS)", "REDACTED FOR PRIVACY"], report["sections"][-1]["rows"])
+        self.assertIn("Registrant Name: REDACTED FOR PRIVACY", report["sections"][-1]["raw"])
+        self.assertTrue(any("whois.registrar.example: REDACTED FOR PRIVACY" in item["text"] for item in report["summary"]))
+
     def test_referral_label_variants_whitespace_and_duplicates(self):
         text = "\n".join(["  REFER: WHOIS.A.EXAMPLE.", " Whois\tServer : whois.a.example", "Registrar WHOIS Server: whois.b.example", "Registry WHOIS Server: whois.c.example", " Referral Server: whois://whois.d.example:43/ (comment)", "ReferralServer: <whois.e.example> (comment)", "whois: whois.f.example, (comment)", "Description: whois: unrelated.example"])
         hosts, errors = referrals(text)
@@ -193,6 +229,19 @@ class WhoisProtocolTests(SimpleTestCase):
             open_whois("whois.example")
         self.assertEqual(dial.call_args.args[:2], ("whois.example", "1.1.1.1"))
         self.assertEqual(dial.call_args.kwargs["port"], 43)
+
+    def test_unreachable_first_address_does_not_prevent_second_public_address(self):
+        sock = MagicMock()
+        with patch("forensics.network.resolve_public", return_value=["1.1.1.1", "8.8.8.8"]), patch("forensics.network._socket", side_effect=[OSError("unreachable"), sock]) as dial:
+            self.assertIs(open_whois("whois.example"), sock)
+        self.assertEqual([call.args[1] for call in dial.call_args_list], ["1.1.1.1", "8.8.8.8"])
+        self.assertTrue(all(call.kwargs["port"] == 43 for call in dial.call_args_list))
+
+    def test_proxy_rejection_does_not_trigger_direct_connection_fallback(self):
+        with patch("forensics.network.resolve_public", return_value=["1.1.1.1", "8.8.8.8"]), patch("forensics.network._socket", side_effect=http.client.HTTPException("CONNECT denied")) as dial:
+            with self.assertRaisesRegex(NetworkError, "HTTP CONNECT zu TCP 43"):
+                open_whois("whois.example")
+        dial.assert_called_once()
 
 
 class RegistrationDomainTests(SimpleTestCase):

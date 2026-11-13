@@ -1,5 +1,11 @@
 # Versionshinweise
 
+## Noch nicht veröffentlicht – 13. November 2026
+
+- Öffentliche DENIC-Web-WHOIS-Abfrage aus dem bereitgestellten Domainanalysator übernommen: öffentliche Inhaber-/Vereinsangaben, verwaltendes Mitglied und Datumsangaben statt eines bloßen manuellen Verweises.
+- WHOIS-Inhaber-, Organisations- und Kontaktfelder einschließlich Privacy-Platzhaltern werden strukturiert angezeigt und bei langen Nameserverlisten priorisiert.
+- Bei Verbindungsfehlern werden weitere geprüfte öffentliche WHOIS-IP-Adressen versucht. Proxy-Ablehnungen werden konkret ausgewiesen, ohne direkten Ausweichversuch.
+
 ## 0.4.0 – 7. November 2026
 
 - DENIC-RDAP für .de-Domains direkt eingebunden, auch ohne Eintrag im IANA-DNS-Verzeichnis. Der Bericht unterscheidet technische Daten und die separate DENIC-Web-WHOIS-Inhaberauskunft.

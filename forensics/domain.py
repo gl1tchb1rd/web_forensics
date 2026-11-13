@@ -18,6 +18,7 @@ from .report import finish, new_report, section
 from .registration import registration_domain
 from .whois import add_whois
 from .rdap_chain import walk_domain_rdap
+from .denic import add_denic_webwhois
 
 OPTIONS = ("rdap", "whois", "network", "tls", "http")
 REGISTRAR_DIRECTORY = "https://www.iana.org/assignments/registrar-ids/registrar-ids-1.csv"
@@ -99,11 +100,15 @@ def make_plan(module, domain="", options=None):
     if module == "domain":
         registered, warning = registration_domain(plan["domain"]) if (options.get("rdap") or options.get("whois")) else (plan["domain"], "")
         plan["registration_domain"] = registered
+        plan["denic_webwhois"] = registered.endswith(".de") and bool(options.get("rdap") or options.get("whois"))
         if warning:
             plan["errors"].append(warning)
     recipients = plan["recipients"]
     recipients.append(["DNS-Auflösung", f"Resolver der Installation: {resolver_description()}", "Abgefragte Domainnamen und Dienstnamen; der Resolver kann rekursiv weitere DNS-Server kontaktieren."])
     if module == "domain":
+        if plan["denic_webwhois"]:
+            recipients.append(["DENIC-Web-WHOIS / öffentliche Inhaberauskunft", "webwhois.denic.de (HTTPS)",
+                               f"Registrierungsdomain {plan['registration_domain']} als query-Parameter; öffentliche Inhaber-/Vereinsangaben und verwaltendes DENIC-Mitglied. Kein Aktenzeichen."])
         if options.get("tls") or options.get("http"):
             recipients.append(["TLS / HTTPS", plan["domain"] + ":443", "Zieldomain (SNI/Host), öffentliche Server-IP des Betreibers; keine Aktenzeichen oder Header. HTTPS ohne automatisches Folgen von Weiterleitungen."])
         if options.get("rdap"):
@@ -330,9 +335,6 @@ def add_domain_registration(report, domain, plan):
         registrar = registrar_query(data, domain, plan)
         if registrar and registrar != final_url:
             add_rdap_section(report, "Registrar-RDAP / Kontakte und Datenschutzhinweise", registrar, plan["allowed_rdap_hosts"], domain=domain)
-    if domain.endswith(".de"):
-        report["limitations"].append("DENIC-RDAP liefert wie das öffentliche Port-43-WHOIS technische Daten. Öffentlich verfügbare Inhaberdaten juristischer Personen (z. B. Vereinsnamen) werden separat im DENIC-Web-WHOIS veröffentlicht und hier nicht automatisch abgerufen. Aus fehlenden Inhaberdaten ist kein Datenschutzstatus ableitbar.")
-        section(report, "DENIC-Web-WHOIS / Inhaberauskunft", [["Manuelle Abfrage", "https://webwhois.denic.de/"], ["Domain", domain]], status="unavailable", note="Inhaberdaten nicht automatisch abgefragt. Für öffentlich verfügbare Organisations- und Vereinsnamen die Domain im DENIC-Web-WHOIS prüfen. Der Link ist ein weiterführender Hinweis, keine abgefragte Quelle.")
 
 
 def add_networks(report, ips, allowed_hosts=None):
@@ -404,6 +406,14 @@ def analyze_domain(case, original, plan):
         report["summary"].append({"level": "notice", "text": error})
     if registered != domain:
         report["summary"].append({"level": "info", "text": f"Die Eingabe ist eine Subdomain. RDAP/WHOIS beziehen sich auf {registered}; DNS, TLS und HTTPS auf {domain}."})
+    # Fetch the independent public holder lookup before potentially slow DNS,
+    # RDAP and TCP-43 chains can consume the common request budget.
+    if registered.endswith(".de") and (options.get("rdap") or options.get("whois")):
+        if plan.get("denic_webwhois"):
+            add_denic_webwhois(report, registered)
+        else:
+            section(report, "DENIC-Web-WHOIS / Inhaberauskunft", [], status="unavailable",
+                    note="Die DENIC-Inhaberauskunft ist in diesem Abfrageplan nicht enthalten. Bitte den Abfrageplan neu erstellen.")
     with ThreadPoolExecutor(max_workers=4) as pool:
         answers = list(pool.map(lambda kind: dns_record(domain, kind), ("A", "AAAA", "NS", "MX", "TXT", "SOA", "CAA")))
     ips = [ip for answer in answers if answer["kind"] in ("A", "AAAA") for ip in answer["values"]]

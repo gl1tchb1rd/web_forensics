@@ -96,21 +96,42 @@ def whois_fields(text):
         "registry expiry date": "Ablaufdatum", "registrar registration expiration date": "Ablaufdatum",
         "expiry date": "Ablaufdatum", "domain status": "Domainstatus", "status": "Domainstatus",
         "name server": "Nameserver", "nserver": "Nameserver", "dnssec": "DNSSEC-Angabe",
+        "registrar abuse contact email": "Registrar / Missbrauchskontakt / E-Mail",
+        "registrar abuse contact phone": "Registrar / Missbrauchskontakt / Telefon",
+        "owner": "Domaininhaber", "holder": "Domaininhaber", "registrant": "Domaininhaber",
+        "org-name": "Organisation", "organization": "Organisation", "organisation": "Organisation",
     }
+    contacts = {
+        "name": "Name", "organization": "Organisation", "organisation": "Organisation",
+        "street": "Straße", "street1": "Straße 1", "street2": "Straße 2", "street3": "Straße 3",
+        "city": "Ort", "state/province": "Bundesland / Region", "state": "Bundesland / Region",
+        "postal code": "Postleitzahl", "country": "Land", "phone": "Telefon", "phone ext": "Telefon-Durchwahl",
+        "fax": "Fax", "fax ext": "Fax-Durchwahl", "email": "E-Mail",
+    }
+    for prefix, role in (("registrant", "Domaininhaber"), ("admin", "Administrativer Kontakt"), ("tech", "Technischer Kontakt"), ("billing", "Rechnungskontakt")):
+        for name, label in contacts.items():
+            labels[prefix + " " + name] = role + " / " + label
+            labels[prefix + " contact " + name] = role + " / " + label
     rows = []
     for line in text.splitlines():
         if ":" not in line:
+            if re.search(r"redacted for privacy|data redacted|not disclosed|not publicly accessible", line, re.I):
+                row = ["Datenschutzhinweis (laut WHOIS)", line.strip()[:2048]]
+                if row not in rows:
+                    rows.append(row)
             continue
         label, value = line.strip().split(":", 1)
         normalized = re.sub(r"[ \t]+", " ", label.lower().strip())
         if normalized in labels and value.strip():
             value = value.strip()
-            row = [labels[normalized] + " (laut WHOIS)", value[:512] + (" … [gekürzt]" if len(value) > 512 else "")]
+            row = [labels[normalized] + " (laut WHOIS)", value[:2048] + (" … [gekürzt]" if len(value) > 2048 else "")]
             if row not in rows:
                 rows.append(row)
-            if len(rows) >= 24:
-                break
-    return rows
+    # Do not let long nameserver/status lists hide holder/contact fields later
+    # in the reply. The complete response remains available in raw data.
+    contact_rows = [row for row in rows if any(role in row[0] for role in ("Domaininhaber", "Kontakt", "Datenschutzhinweis"))]
+    others = [row for row in rows if row not in contact_rows]
+    return (contact_rows + others)[:96]
 
 
 def whois_query(server, query):
@@ -257,7 +278,7 @@ def add_whois(report, domain):
                 ["SHA-256 der empfangenen Bytes", rec["sha256"] or "Keine Daten"]]
         rows.extend(whois_fields(rec["text"]))
         notes = ["WHOIS über TCP 43 ist unverschlüsselt. Antworten können beschränkt, veraltet oder manipuliert sein."]
-        notes.append("Strukturierte Anzeige der gebräuchlichen Felder: maximal 24 Werte mit je 512 Zeichen; Datumsangaben unverändert aus der Quelle, ohne angenommene Zeitzone.")
+        notes.append("Strukturierte Anzeige einschließlich Inhaber- und Kontaktfeldern: maximal 96 Werte mit je 2.048 Zeichen; Datumsangaben unverändert aus der Quelle, ohne angenommene Zeitzone.")
         if rec["error"]:
             notes.append(rec["error"])
         if not rec["complete"]:
@@ -272,4 +293,10 @@ def add_whois(report, domain):
             report["sources"].append(source)
     report["summary"].append({"level": "info" if bundle["complete"] else "notice",
                               "text": f"WHOIS-Kette: {len(bundle['queried_servers'])} Dienst(e), {len(bundle['attempts'])} Abfrage(n). {bundle['reason']}"})
+    for rec in reversed(bundle["attempts"]):
+        names = list(dict.fromkeys(value for label, value in whois_fields(rec["text"])
+                                  if label in ("Domaininhaber (laut WHOIS)", "Domaininhaber / Name (laut WHOIS)", "Domaininhaber / Organisation (laut WHOIS)")))
+        if names:
+            report["summary"].append({"level": "info", "text": f"WHOIS-Inhaberangaben von {rec['server']}: " + " / ".join(names) + "."})
+            break
     return bundle

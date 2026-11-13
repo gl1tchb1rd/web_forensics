@@ -161,7 +161,7 @@ class RegistrationTests(SimpleTestCase):
         self.assertEqual(registration["status"], "unavailable")
         self.assertEqual(registration["rows"], [])
 
-    def test_de_keeps_technical_data_and_distinguishes_manual_holder_lookup(self):
+    def test_de_keeps_technical_data_but_does_not_add_undisclosed_lookup_to_old_plan(self):
         domain = "feuerwehr-vestenberg.de"
         plan = {"options": {"rdap": True}, "recipients": [], "errors": [], "provider": "https://rdap.denic.de/", "allowed_rdap_hosts": ["rdap.denic.de"]}
         data = {"ldhName": domain, "nameservers": [{"ldhName": "ns.example.org"}], "status": ["active"]}
@@ -172,7 +172,7 @@ class RegistrationTests(SimpleTestCase):
         self.assertNotIn("REDACTED FOR PRIVACY", str(registration))
         manual = next(s for s in report["sections"] if s["title"].startswith("DENIC-Web"))
         self.assertEqual(manual["status"], "unavailable")
-        self.assertIn("Inhaberdaten nicht automatisch abgefragt", manual["note"])
+        self.assertIn("Abfrageplan neu erstellen", manual["note"])
         self.assertNotIn("https://webwhois.denic.de/", report["sources"])
 
     def test_nested_org_contacts_and_entity_remarks_are_visible(self):
